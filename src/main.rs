@@ -24,6 +24,25 @@ fn healthcheck(port: u16) -> i32 {
     }
 }
 
+/// Resolves on SIGINT or SIGTERM. `docker stop` and redeploys send SIGTERM, and the process is PID 1.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = term => {},
+    }
+}
+
 fn exit_with(message: String) -> ! {
     eprintln!("{message}");
     std::process::exit(2)
@@ -68,9 +87,7 @@ async fn main() {
     tracing::info!(%addr, env, version = VERSION, idle_days, "bulut started");
 
     axum::serve(listener, http::router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server error");
 }

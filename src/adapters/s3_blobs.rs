@@ -256,22 +256,43 @@ impl BlobStore for S3BlobStore {
 
     async fn delete_many(&self, keys: &[String]) -> Result<(), BlobError> {
         for chunk in keys.chunks(1000) {
-            let objects: Vec<ObjectIdentifier> = chunk
+            let objects = chunk
                 .iter()
-                .filter_map(|k| ObjectIdentifier::builder().key(k).build().ok())
-                .collect();
+                .map(|k| ObjectIdentifier::builder().key(k).build().map_err(storage))
+                .collect::<Result<Vec<_>, _>>()?;
             let delete = Delete::builder()
                 .set_objects(Some(objects))
                 .quiet(true)
                 .build()
                 .map_err(storage)?;
-            self.client
+            let out = self
+                .client
                 .delete_objects()
                 .bucket(&self.bucket)
                 .delete(delete)
                 .send()
                 .await
                 .map_err(storage)?;
+            // The store answers 200 and lists the keys it could not delete. A key that is already
+            // gone is fine (Garage reports it as an error, S3 does not).
+            let failed: Vec<_> = out
+                .errors()
+                .iter()
+                .filter(|e| {
+                    let missing = e.code() == Some("NoSuchKey")
+                        || e.message()
+                            .is_some_and(|m| m.to_ascii_lowercase().contains("not found"));
+                    !missing
+                })
+                .collect();
+            if let Some(first) = failed.first() {
+                return Err(BlobError::Storage(format!(
+                    "{} object(s) not deleted, first: {} ({})",
+                    failed.len(),
+                    first.key().unwrap_or("?"),
+                    first.message().unwrap_or("no message")
+                )));
+            }
         }
         Ok(())
     }
@@ -315,6 +336,58 @@ mod tests {
     async fn ensure_bucket_is_idempotent() {
         let s = store().await;
         s.ensure_bucket().await.unwrap();
+    }
+
+    /// Objects and unfinished multipart uploads under a prefix, straight from the bucket.
+    async fn leftovers(s: &S3BlobStore, prefix: &str) -> (usize, usize) {
+        let objects = s
+            .client
+            .list_objects_v2()
+            .bucket(&s.bucket)
+            .prefix(prefix)
+            .send()
+            .await
+            .unwrap()
+            .contents()
+            .len();
+        let uploads = s
+            .client
+            .list_multipart_uploads()
+            .bucket(&s.bucket)
+            .prefix(prefix)
+            .send()
+            .await
+            .unwrap()
+            .uploads()
+            .len();
+        (objects, uploads)
+    }
+
+    #[tokio::test]
+    async fn deleting_and_aborting_really_frees_the_bucket() {
+        let s = store().await;
+        let prefix = format!("test/{}/", uuid::Uuid::new_v4());
+        let keys: Vec<String> = (0..3).map(|i| format!("{prefix}file-{i}")).collect();
+        for k in &keys {
+            s.put(k, Bytes::from(vec![1u8; 1000]), "x").await.unwrap();
+        }
+        // An unfinished multipart upload also holds space until it is aborted.
+        let pending = format!("{prefix}pending");
+        let id = s.start_multipart(&pending, "x").await.unwrap();
+        s.put_part(&pending, &id, 1, Bytes::from(vec![2u8; 5 * 1024 * 1024]))
+            .await
+            .unwrap();
+        assert_eq!(leftovers(&s, &prefix).await, (3, 1));
+
+        s.abort_multipart(&pending, &id).await.unwrap();
+        s.delete_many(&keys).await.unwrap();
+        assert_eq!(
+            leftovers(&s, &prefix).await,
+            (0, 0),
+            "nothing is left in the bucket"
+        );
+        // Deleting again, or deleting keys that never existed, is not an error.
+        s.delete_many(&keys).await.unwrap();
     }
 
     #[test]

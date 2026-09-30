@@ -112,6 +112,13 @@ impl Config {
                 other => return Err(ConfigError::Invalid("FOLDERS_ENABLED", other.to_string())),
             },
         };
+        if max_file_bytes.div_ceil(chunk_size as u64) > 10_000 {
+            // S3 multipart uploads have at most 10000 parts. Fail at startup, not after gigabytes.
+            return Err(ConfigError::Invalid(
+                "MAX_FILE_BYTES",
+                format!("{max_file_bytes} needs more than 10000 parts of CHUNK_SIZE {chunk_size}"),
+            ));
+        }
         let session_idle_ttl_days: u32 =
             num("SESSION_IDLE_TTL_DAYS", get("SESSION_IDLE_TTL_DAYS"), 7)?;
         if session_idle_ttl_days == 0 {
@@ -185,5 +192,12 @@ mod tests {
         assert!(Config::from_map(&vars(&[("SESSION_IDLE_TTL_DAYS", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("FOLDERS_ENABLED", "maybe")])).is_err());
+        // 100 GB in 8 MiB parts is 11920 parts, more than S3 allows.
+        assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "100000000000")])).is_err());
+        assert!(Config::from_map(&vars(&[
+            ("MAX_FILE_BYTES", "100000000000"),
+            ("CHUNK_SIZE", "16777216")
+        ]))
+        .is_ok());
     }
 }

@@ -13,6 +13,14 @@
 - [x] 11. Idle sweeper (7 days, from `.env`)
 - [x] 12. CI (mirrors the tako CI config), auto version bump, image review in CI
 
+## Known issues from the code review (not fixed yet)
+- `llms.txt` and MCP `get_session` run one query per file and per folder (up to 1000 files). Batch the versions
+  into one query and index the latest versions by node id instead of searching a list.
+- `complete` deletes the stored file and forgets the upload when the database fails after the object store
+  finished the upload, so the client has to send the whole file again. Keep the upload row and let `complete`
+  be retried.
+- Nothing checks a name clash with a folder at `init`, only at `complete`. Not reachable while folders are off.
+
 ## Later
 - Folders support: the backend exists (tree, folder create, upload into a folder, breadcrumbs) and is disabled by
   `FOLDERS_ENABLED=false`. To finish: folder navigation and creation in the UI, folder notes, `llms.txt` and MCP

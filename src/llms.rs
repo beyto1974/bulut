@@ -140,13 +140,13 @@ pub fn session_index(base_url: &str, session: &Session, idle_ttl_days: u32, walk
         }
     }
     if walk.truncated {
-        let _ = writeln!(o, "\n(The list is cut off. Use GET {base_url}/api/s/{code}/files?parent=<id> to browse a folder.)");
+        let _ = writeln!(o, "\n(The list is cut off. Use GET {base_url}/api/s/{code}/files for the complete listing.)");
     }
     let _ = writeln!(o, "\n## More\n");
     let _ = writeln!(o, "- JSON listing: {base_url}/api/s/{code}/files");
     let _ = writeln!(
         o,
-        "- Upload a file: curl -T file {base_url}/api/s/{code}/upload?name=file&tag=v1"
+        "- Upload a file: curl -T file '{base_url}/api/s/{code}/upload?name=file&tag=v1'"
     );
     let _ = writeln!(o, "- API description: {base_url}/openapi.json");
     let _ = writeln!(o, "- General guide: {base_url}/llms.txt");
@@ -313,7 +313,9 @@ mod tests {
         assert!(text.contains("  - v2: 48.2 MB, uploaded 2026-09-30 09:00 UTC, tags: latest, v1.4.2, https://bulut.dev/api/s/k7m3q/versions/"));
         assert!(text.contains("  - v1: 47.9 MB"));
         assert!(text.contains("newest: https://bulut.dev/api/s/k7m3q/download?name=build.apk\n"));
-        assert!(text.contains("curl -T file https://bulut.dev/api/s/k7m3q/upload?name=file&tag=v1"));
+        assert!(
+            text.contains("curl -T file 'https://bulut.dev/api/s/k7m3q/upload?name=file&tag=v1'")
+        );
     }
 
     #[test]

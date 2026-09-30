@@ -88,6 +88,9 @@ pub async fn handle(state: &AppState, req: Value) -> Option<Value> {
         "tools/list" => json!({ "tools": tools() }),
         "tools/call" => {
             let name = req["params"]["name"].as_str().unwrap_or("");
+            if name.is_empty() {
+                return Some(rpc_error(&id, -32602, "missing tool name"));
+            }
             let args = &req["params"]["arguments"];
             match call_tool(state, name, args).await {
                 Ok(text) => {
@@ -96,9 +99,6 @@ pub async fn handle(state: &AppState, req: Value) -> Option<Value> {
                 Err(ServiceError::Storage(m)) => {
                     tracing::error!(tool = name, error = %m, "mcp tool failed");
                     json!({ "content": [{ "type": "text", "text": "internal error" }], "isError": true })
-                }
-                Err(ServiceError::NotFound) if name.is_empty() => {
-                    return Some(rpc_error(&id, -32602, "missing tool name"))
                 }
                 Err(e) => {
                     json!({ "content": [{ "type": "text", "text": e.to_string() }], "isError": true })

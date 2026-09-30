@@ -342,3 +342,38 @@ async fn streamed_upload_edge_cases() {
     assert_eq!(f.blobs.open_uploads(), 0);
     f.sessions.delete(&s.code).await.unwrap();
 }
+
+#[tokio::test]
+async fn a_dropped_streamed_upload_releases_its_multipart_upload() {
+    let f = fixture().await;
+    let s = f.sessions.create("").await.unwrap();
+    let uploads = f.uploads.clone();
+    let code = s.code.clone();
+    // One part arrives, then the client goes quiet and the connection is cut.
+    let body =
+        stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"0123456789abc")) })
+            .chain(stream::pending::<Result<Bytes, std::io::Error>>());
+    let task = tokio::spawn(async move {
+        uploads
+            .upload_stream(&code, None, "cut.bin", None, None, &[], Box::pin(body))
+            .await
+    });
+    for _ in 0..200 {
+        if f.blobs.open_uploads() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(f.blobs.open_uploads(), 1, "the upload was under way");
+    task.abort();
+    let _ = task.await;
+    for _ in 0..200 {
+        if f.blobs.open_uploads() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(f.blobs.open_uploads(), 0, "the dropped upload was aborted");
+    assert!(f.blobs.keys().is_empty());
+    f.sessions.delete(&s.code).await.unwrap();
+}

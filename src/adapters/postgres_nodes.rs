@@ -94,7 +94,7 @@ async fn check_parent(
 
 /// Result of one try at adding a version.
 enum Attempt {
-    Done((Node, FileVersion)),
+    Done(Box<(Node, FileVersion)>),
     LostRace,
 }
 
@@ -190,7 +190,7 @@ impl PgNodeRepo {
             .await
             .map_err(storage)?;
         tx.commit().await.map_err(storage)?;
-        Ok(Attempt::Done((node, version_from(&row))))
+        Ok(Attempt::Done(Box::new((node, version_from(&row)))))
     }
 }
 
@@ -240,7 +240,7 @@ impl NodeRepo for PgNodeRepo {
                 .try_add_version(session, parent, name, &new, now)
                 .await?
             {
-                Attempt::Done(pair) => return Ok(pair),
+                Attempt::Done(pair) => return Ok(*pair),
                 Attempt::LostRace => continue,
             }
         }

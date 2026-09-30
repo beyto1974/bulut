@@ -120,6 +120,16 @@
       h('p', { class: 'muted', text: 'A session holds files for people and for development environments. Open one with its code or start a new one.' }),
       form,
       h('div', null, create),
+      h('section', { class: 'agents', id: 'agent-info', 'aria-labelledby': 'agents-title' },
+        h('h2', { id: 'agents-title', text: 'Agent friendly' }),
+        h('p', { class: 'muted', text: 'Everything in the UI is also available to scripts and language models, with no extra setup.' }),
+        h('ul', null,
+          h('li', null, h('strong', { text: 'REST API' }), ' for sessions, files, versions, tags and chunked uploads. Described in ',
+            h('a', { href: '/openapi.json', text: 'openapi.json' }), '.'),
+          h('li', null, h('strong', { text: 'Plain text' }), ': ', h('a', { href: '/llms.txt', text: '/llms.txt' }),
+            ' explains the service, and ', h('code', { text: '/<code>/llms.txt' }), ' lists what a session holds.'),
+          h('li', null, h('strong', { text: 'MCP' }), ' at ', h('code', { text: '/mcp' }), ' for tools such as create, read, upload and tag.'),
+          h('li', null, h('strong', { text: 'One-line upload' }), ': ', h('code', { text: 'curl -T file \'<this site>/api/s/<code>/upload?name=file\'' }), '.'))),
     ));
     input.focus();
   }
@@ -144,7 +154,7 @@
     }
     document.title = `${code} · Bulut` + (config.env && config.env !== 'production' ? ` (${config.env})` : '');
 
-    const state = { items: [], selectedId: null, versions: [], versionId: null, queue: [], busy: false };
+    const state = { items: [], selectedId: null, versions: [], versionId: null, queue: [], active: new Map() };
     const base = `/api/s/${code}`;
 
     // --- skeleton ---
@@ -390,23 +400,31 @@
       return api('POST', `${statusUrl}/complete`);
     }
 
-    async function processQueue() {
-      if (state.busy) return;
-      state.busy = true;
-      while (state.queue.length) {
-        const job = state.queue.shift();
-        job.status.textContent = 'Uploading';
-        try {
-          const stored = await uploadFile(job.file, (f) => { job.bar.style.width = `${Math.round(f * 100)}%`; });
-          job.status.textContent = `Done, v${stored.version.version}`;
-          await reload();
-          await select(stored.node.id);
-        } catch (e) {
-          job.status.textContent = e.message;
-          job.status.classList.add('err');
-        }
+    // Several files upload at the same time, so a small file does not wait behind a large one.
+    // Two files with the same name never run together, so their versions follow the order they were added.
+    const MAX_PARALLEL = 3;
+
+    async function runJob(job) {
+      job.status.textContent = 'Uploading';
+      try {
+        const stored = await uploadFile(job.file, (f) => { job.bar.style.width = `${Math.round(f * 100)}%`; });
+        job.status.textContent = `Done, v${stored.version.version}`;
+        await reload();
+        await select(stored.node.id);
+      } catch (e) {
+        job.status.textContent = e.message;
+        job.status.classList.add('err');
       }
-      state.busy = false;
+    }
+
+    function pump() {
+      while (state.active.size < MAX_PARALLEL) {
+        const next = state.queue.findIndex((j) => !state.active.has(j.file.name));
+        if (next < 0) return;
+        const [job] = state.queue.splice(next, 1);
+        state.active.set(job.file.name, job);
+        runJob(job).finally(() => { state.active.delete(job.file.name); pump(); });
+      }
     }
 
     function enqueue(files) {
@@ -418,7 +436,7 @@
           h('div', { class: 'progress' }, bar)));
         state.queue.push({ file, bar, status });
       }
-      processQueue();
+      pump();
     }
 
     function acceptDrop(dt) {

@@ -23,6 +23,9 @@ function check(cond, msg) {
   check((await page.title()).startsWith('Bulut'), 'home title ' + (await page.title()));
   check(await page.locator('#env-badge').isVisible(), 'environment badge is visible outside production');
   check((await page.locator('#footer-version').textContent()).includes('bulut v'), 'version in footer');
+  const info = await page.locator('#agent-info').textContent();
+  check(/REST API/.test(info) && /llms\.txt/.test(info) && /MCP/.test(info), 'home page says it is agent friendly (REST, llms.txt, MCP)');
+  check((await page.locator('#agent-info a[href="/openapi.json"]').count()) === 1, 'home page links to openapi.json');
   await page.screenshot({ path: `${OUT}/home.png` });
 
   // New session
@@ -55,6 +58,23 @@ function check(cond, msg) {
   check((await page.locator('tr.row-item').count()) === 2, 'two files listed (second upload of build.apk is a version)');
   const apkRow = page.locator('tr.row-item', { hasText: 'build.apk' });
   check((await apkRow.textContent()).includes('2 versions'), 'row shows 2 versions');
+
+  // Several files chosen at once upload in parallel and all arrive.
+  await page.setInputFiles('#file-input', [
+    { name: 'p1.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
+    { name: 'p2.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
+    { name: 'p3.txt', mimeType: 'text/plain', buffer: Buffer.from('three') },
+    { name: 'p4.txt', mimeType: 'text/plain', buffer: Buffer.from('four') },
+  ]);
+  await page.waitForFunction(() => document.querySelectorAll('tr.row-item').length === 6);
+  await page.waitForFunction(() => [...document.querySelectorAll('#queue .q-status')].every((s) => s.textContent.startsWith('Done')));
+  check(true, 'four files chosen together all uploaded');
+  for (const n of ['p1', 'p2', 'p3', 'p4']) {
+    await page.locator('tr.row-item', { hasText: n + '.txt' }).click();
+    await page.click('#delete-file');
+    await page.click('#delete-file');
+    await page.waitForFunction((name) => ![...document.querySelectorAll('tr.row-item')].some((r) => r.textContent.includes(name)), n + '.txt');
+  }
 
   // Inspector: versions, tags, note
   await apkRow.click();

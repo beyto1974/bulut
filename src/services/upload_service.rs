@@ -13,6 +13,47 @@ use crate::ports::node_repo::{NewVersion, NodeRepo};
 use crate::ports::upload_repo::UploadRepo;
 use crate::services::error::ServiceError;
 
+/// Aborts a multipart upload when dropped while armed. A client that disconnects during a streamed
+/// upload makes the server drop the handler at an await point, where no cleanup code would run.
+struct AbortOnDrop {
+    blobs: Arc<dyn BlobStore>,
+    key: String,
+    upload_id: String,
+    armed: bool,
+}
+
+impl AbortOnDrop {
+    fn new(blobs: Arc<dyn BlobStore>, key: &str, upload_id: &str) -> Self {
+        Self {
+            blobs,
+            key: key.to_string(),
+            upload_id: upload_id.to_string(),
+            armed: true,
+        }
+    }
+
+    /// The normal paths finish or abort the upload themselves.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let (blobs, key, id) = (self.blobs.clone(), self.key.clone(), self.upload_id.clone());
+            rt.spawn(async move {
+                if let Err(e) = blobs.abort_multipart(&key, &id).await {
+                    tracing::warn!(error = %e, "could not abort a dropped upload");
+                }
+            });
+        }
+    }
+}
+
 pub struct NewUpload {
     pub parent: Option<Uuid>,
     pub name: String,
@@ -306,6 +347,7 @@ impl UploadService {
         let content_type = clean_content_type(content_type);
         let key = format!("{session}/{}", Uuid::new_v4());
         let upload_id = self.blobs.start_multipart(&key, &content_type).await?;
+        let mut guard = AbortOnDrop::new(self.blobs.clone(), &key, &upload_id);
 
         let result = async {
             let mut parts: Vec<PartInfo> = Vec::new();
@@ -345,6 +387,8 @@ impl UploadService {
             Ok::<u64, ServiceError>(total)
         }
         .await;
+        // From here the code below finishes or aborts the upload itself.
+        guard.disarm();
 
         let total = match result {
             Ok(t) => t,

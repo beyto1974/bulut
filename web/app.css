@@ -121,6 +121,11 @@ textarea { min-height: 84px; resize: vertical; }
 .home form { display: flex; gap: 8px; flex-wrap: wrap; }
 .home input[type="text"] { flex: 1; min-width: 160px; font: 600 20px var(--mono); letter-spacing: .1em; text-transform: lowercase; }
 
+.agents { border-top: 1px solid var(--line); padding-top: 16px; display: grid; gap: 8px; }
+.agents p { margin: 0; }
+.agents ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.agents code { font: 12px var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; overflow-wrap: anywhere; }
+
 dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); padding: 0; max-width: calc(100vw - 32px); }
 dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .dialog-body { padding: 20px; display: grid; gap: 14px; justify-items: center; }

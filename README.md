@@ -29,7 +29,8 @@ Copy `.env.example` to `.env`. Settings are read from the environment.
 cargo test
 devdb create --project bulut        # private database on the shared dev Postgres
 devgarage create --project bulut    # private bucket on the shared dev Garage
-HOST_PORT=$(freeport) docker compose up -d --no-deps backend
+freeport                              # put the number in .env as HOST_PORT, and use it in BASE_URL
+docker compose up -d --no-deps backend
 ```
 
 Open `http://localhost:<HOST_PORT>`. Do not start a per-environment `db` or `garage`.
