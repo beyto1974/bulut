@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::domain::node::{validate_name, validate_tag, FileVersion, Node, NodeEntry};
+use crate::domain::node::{validate_name, validate_tag, FileVersion, Node, NodeEntry, NodeKind};
 use crate::ports::blob_store::{BlobRead, BlobStore};
 use crate::ports::clock::Clock;
 use crate::ports::node_repo::{NodePatch, NodeRepo};
@@ -10,7 +10,22 @@ use crate::services::error::ServiceError;
 
 const MAX_NOTE: usize = 4000;
 
+/// One row of [`TreeService::walk`].
+pub struct WalkItem {
+    /// Path from the session root.
+    pub path: String,
+    pub entry: NodeEntry,
+    /// Newest first. Empty for folders.
+    pub versions: Vec<FileVersion>,
+}
+
+pub struct Walk {
+    pub items: Vec<WalkItem>,
+    pub truncated: bool,
+}
+
 pub struct TreeService {
+    pub folders_enabled: bool,
     pub nodes: Arc<dyn NodeRepo>,
     pub blobs: Arc<dyn BlobStore>,
     pub clock: Arc<dyn Clock>,
@@ -29,6 +44,58 @@ impl TreeService {
                 .ok_or(ServiceError::NotFound)?;
         }
         Ok(self.nodes.list(session, parent).await?)
+    }
+
+    /// Every node of a session in display order (folders first, contents right after their
+    /// folder), with file versions, for the text index. Stops at `limit` nodes and says so.
+    pub async fn walk(&self, session: &str, limit: usize) -> Result<Walk, ServiceError> {
+        let mut walk = Walk {
+            items: Vec::new(),
+            truncated: false,
+        };
+        self.walk_dir(session, None, String::new(), limit, &mut walk)
+            .await?;
+        Ok(walk)
+    }
+
+    fn walk_dir<'a>(
+        &'a self,
+        session: &'a str,
+        parent: Option<Uuid>,
+        prefix: String,
+        limit: usize,
+        walk: &'a mut Walk,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ServiceError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            for entry in self.nodes.list(session, parent).await? {
+                if walk.items.len() >= limit {
+                    walk.truncated = true;
+                    return Ok(());
+                }
+                let path = format!("{prefix}{}", entry.node.name);
+                let is_folder = entry.node.kind == NodeKind::Folder;
+                let versions = if is_folder {
+                    Vec::new()
+                } else {
+                    self.nodes.versions(session, entry.node.id).await?
+                };
+                let id = entry.node.id;
+                walk.items.push(WalkItem {
+                    path: path.clone(),
+                    entry,
+                    versions,
+                });
+                if is_folder {
+                    self.walk_dir(session, Some(id), format!("{path}/"), limit, walk)
+                        .await?;
+                    if walk.truncated {
+                        return Ok(());
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Path from the root to `id`, for breadcrumbs. Empty for the root.
@@ -57,6 +124,9 @@ impl TreeService {
         parent: Option<Uuid>,
         name: &str,
     ) -> Result<Node, ServiceError> {
+        if !self.folders_enabled {
+            return Err(ServiceError::Invalid("folders are not enabled".into()));
+        }
         let name = validate_name(name).map_err(|m| ServiceError::Invalid(m.into()))?;
         Ok(self
             .nodes

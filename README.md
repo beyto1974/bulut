@@ -1,11 +1,11 @@
 # Bulut
 
-A small dropbox for sessions. Each session has a short, human-readable URL and holds files and folders.
+A small dropbox for sessions. Each session has a short, human-readable URL and holds files.
 People use the web UI, LLM agents use REST, `llms.txt`, `openapi.json` or the MCP tool.
 
 - Short code: 5 lowercase letters and digits, without look-alike characters (`0 o 1 l i`). Length is set by `CODE_LENGTH`.
 - Files can be up to 1 GB, uploaded in resumable chunks (S3 multipart).
-- Files and folders can have a note. A session has a description.
+- Files can have a note. A session has a description.
 - Uploading a file with an existing name adds a new version. Versions can be tagged (`v1.4.2`, `latest`).
   Both the created time and the uploaded time are kept.
 - Every session has a QR code of its link.

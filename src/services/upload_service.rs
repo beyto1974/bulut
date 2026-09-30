@@ -22,6 +22,7 @@ pub struct NewUpload {
 }
 
 pub struct UploadService {
+    pub folders_enabled: bool,
     pub uploads: Arc<dyn UploadRepo>,
     pub nodes: Arc<dyn NodeRepo>,
     pub blobs: Arc<dyn BlobStore>,
@@ -48,6 +49,9 @@ impl UploadService {
     }
 
     async fn check_parent(&self, session: &str, parent: Option<Uuid>) -> Result<(), ServiceError> {
+        if parent.is_some() && !self.folders_enabled {
+            return Err(ServiceError::Invalid("folders are not enabled".into()));
+        }
         if let Some(p) = parent {
             let node = self
                 .nodes

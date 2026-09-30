@@ -3,6 +3,7 @@ pub mod app;
 pub mod config;
 pub mod domain;
 pub mod http;
+pub mod llms;
 pub mod logging;
 pub mod ports;
 pub mod services;

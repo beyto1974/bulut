@@ -14,6 +14,9 @@
 - [ ] 12. CI (mirror the tako CI config), auto version bump, final image review
 
 ## Later
+- Folders support: the backend exists (tree, folder create, upload into a folder, breadcrumbs) and is disabled by
+  `FOLDERS_ENABLED=false`. To finish: folder navigation and creation in the UI, folder notes, `llms.txt` and MCP
+  wording, then switch the default on. Nothing in the UI or docs promises folders until then.
 - Thumbnails for images (the `thumb_key` column and `has_thumbnail` field already exist, the UI shows a file icon until then)
 - Mail and OTP, themed HTML mails (not planned: access control is handled by Traefik)
 - Per-file QR code

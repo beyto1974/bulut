@@ -20,5 +20,7 @@ Rust (axum) service, Postgres via sqlx, S3 (Garage) for blobs, plain-JS UI in `w
   Traefik level (bearer token for agents and REST, basic auth for humans). Do not add auth code to the app.
 - Idle expiry: `sessions.last_activity_at` is touched on any access (throttled to once per minute per session).
   A sweeper deletes sessions idle longer than `SESSION_IDLE_TTL_DAYS`, including blobs.
+- Folders are implemented but disabled by default (`FOLDERS_ENABLED`). Do not build UI for them or mention them in
+  user-facing docs until that is planned. They stay in the todo.
 - Same name in a folder creates a new file version. The `latest` tag moves to the newest upload.
 - Mail, OTP and themed HTML mails are out of scope for v1.

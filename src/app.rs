@@ -26,6 +26,7 @@ pub fn build_state(
     let nodes = Arc::new(PgNodeRepo::new(pool.clone()));
     let clock = Arc::new(SystemClock);
     let uploads = Arc::new(UploadService {
+        folders_enabled: config.folders_enabled,
         uploads: Arc::new(PgUploadRepo::new(pool.clone())),
         nodes: nodes.clone(),
         blobs: blobs.clone(),
@@ -44,6 +45,7 @@ pub fn build_state(
         idle_ttl_days: config.session_idle_ttl_days,
     });
     let tree = Arc::new(TreeService {
+        folders_enabled: config.folders_enabled,
         nodes,
         blobs,
         clock,

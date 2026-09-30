@@ -59,6 +59,8 @@ pub struct Config {
     pub code_length: usize,
     pub chunk_size: usize,
     pub max_file_bytes: u64,
+    /// Folder support is built but switched off until the UI handles it.
+    pub folders_enabled: bool,
     pub session_idle_ttl_days: u32,
     pub sweep_interval_secs: u64,
 }
@@ -102,6 +104,14 @@ impl Config {
         if max_file_bytes == 0 {
             return Err(ConfigError::Invalid("MAX_FILE_BYTES", "0".into()));
         }
+        let folders_enabled = match get("FOLDERS_ENABLED") {
+            None => false,
+            Some(v) => match v.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => true,
+                "false" | "0" | "no" | "off" => false,
+                other => return Err(ConfigError::Invalid("FOLDERS_ENABLED", other.to_string())),
+            },
+        };
         let session_idle_ttl_days: u32 =
             num("SESSION_IDLE_TTL_DAYS", get("SESSION_IDLE_TTL_DAYS"), 7)?;
         if session_idle_ttl_days == 0 {
@@ -117,6 +127,7 @@ impl Config {
             code_length,
             chunk_size,
             max_file_bytes,
+            folders_enabled,
             session_idle_ttl_days,
             sweep_interval_secs: num("SWEEP_INTERVAL_SECS", get("SWEEP_INTERVAL_SECS"), 3600)?,
         })
@@ -143,6 +154,7 @@ mod tests {
         assert_eq!(c.code_length, 5);
         assert_eq!(c.session_idle_ttl_days, 7);
         assert_eq!(c.max_file_bytes, 1024 * 1024 * 1024);
+        assert!(!c.folders_enabled, "folders are off by default");
         assert_eq!(c.base_url, "http://localhost:8080");
     }
 
@@ -172,5 +184,6 @@ mod tests {
         assert!(Config::from_map(&vars(&[("CHUNK_SIZE", "1024")])).is_err());
         assert!(Config::from_map(&vars(&[("SESSION_IDLE_TTL_DAYS", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "0")])).is_err());
+        assert!(Config::from_map(&vars(&[("FOLDERS_ENABLED", "maybe")])).is_err());
     }
 }

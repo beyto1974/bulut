@@ -42,6 +42,7 @@ pub async fn fixture() -> Fixture {
     // Start far in the past so a sweep here never reaches sessions other tests made with the real clock.
     let clock = Arc::new(ManualClock::new(Utc::now() - Duration::days(120)));
     let uploads = Arc::new(UploadService {
+        folders_enabled: true,
         uploads: Arc::new(PgUploadRepo::new(pool.clone())),
         nodes: nodes.clone(),
         blobs: blobs.clone(),
@@ -61,6 +62,7 @@ pub async fn fixture() -> Fixture {
         idle_ttl_days: 7,
     });
     let tree = Arc::new(TreeService {
+        folders_enabled: true,
         nodes: nodes.clone(),
         blobs: blobs.clone(),
         clock: clock.clone(),
