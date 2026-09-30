@@ -2,8 +2,8 @@
 
 ## Phases
 - [x] 1. Scaffold: config, JSON logging, `/healthz`, `/api/version`, Dockerfile, compose, docs
-- [ ] 2. Domain: `ShortCode` and code generator
-- [ ] 3. Persistence: migrations, `SessionRepo` on Postgres, `last_activity_at`
+- [x] 2. Domain: `ShortCode` and code generator
+- [x] 3. Persistence: migrations, `SessionRepo` on Postgres, `last_activity_at`
 - [ ] 4. Sessions and tree API, `openapi.json`
 - [ ] 5. S3 blob store, chunked resumable uploads, range downloads
 - [ ] 6. Versions, tags, created and uploaded times
