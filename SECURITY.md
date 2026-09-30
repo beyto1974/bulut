@@ -2,11 +2,14 @@
 
 ## Reporting a vulnerability
 
-Please report security problems privately, not in a public issue. Use the repository's
-**Security** tab, then **Report a vulnerability** (GitHub private vulnerability reporting).
+Please report security problems privately, not in a public issue. The contact is GitHub itself, there is
+no email address: open
+[a private security advisory](https://github.com/beyto1974/bulut/security/advisories/new) (repository
+**Security** tab, then **Report a vulnerability**). Only the maintainer can read it.
 Include what you found, how to reproduce it, and the version (`GET /api/version`).
 
-You will get an answer within a few days. Fixes are released as a new patch version of the image.
+You will get an answer through the advisory within a few days. Fixes are released as a new patch version of
+the image, and the advisory is published once it is out.
 
 ## Supported versions
 
