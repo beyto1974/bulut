@@ -37,7 +37,8 @@ Open `http://localhost:<HOST_PORT>`. Do not start a per-environment `db` or `gar
 ## Tests
 
 `cargo test` runs unit tests and integration tests against the shared dev Postgres and Garage (settings from `.env`).
-Two end-to-end scripts run against a running instance:
+Two end-to-end scripts run against a running instance (the browser test needs Playwright with Chromium; if it is
+installed globally, run it with `NODE_PATH=$(npm root -g)`):
 
 ```bash
 node e2e/ui.test.js http://localhost:<port>         # real browser: upload, versions, tags, notes, QR dialog
