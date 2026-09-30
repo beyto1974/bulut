@@ -57,7 +57,19 @@ python3 e2e/big_upload.py http://localhost:<port>   # 1 GB in chunks with a resu
 `src/http` routes and handlers, `src/llms.rs` text indexes, `src/qr.rs` QR code. The UI is plain HTML, CSS and JS in
 `web/` (embedded in the binary, no build step).
 
-## Versioning
+## Versioning and CI
 
-The `VERSION` file is the single source. CI bumps it on each release, the binary embeds it, and the UI footer
-and `GET /api/version` show it.
+The `VERSION` file is the single source. The binary embeds it, and the UI footer and `GET /api/version` show it.
+
+`.github/workflows/ci.yml` follows the tako workflow (self-hosted runner, skip pushes already covered by a PR):
+
+- every push and PR: `cargo fmt --check`, clippy, the tests (Postgres and an S3 mock as service containers),
+  the bump script tests, and a build of the image that is reviewed for size and leaked settings.
+- a push to `main`: the patch version is bumped and committed (`chore(release): vX.Y.Z [skip ci]`, tagged `vX.Y.Z`),
+  the image is built from that commit and pushed as `latest`, `X.Y.Z` and the short commit, and an optional webhook
+  is called.
+
+Repository settings the workflow reads: variable `REGISTRY_URL`, secrets `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`
+and optionally `IMAGE_UPDATED_WEBHOOK_URL`. Without `REGISTRY_URL` nothing is published.
+
+The running environment (`APP_ENV`) is a runtime setting, so one image serves production, testing and development.

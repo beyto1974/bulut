@@ -12,6 +12,10 @@ Rust (axum) service, Postgres via sqlx, S3 (Garage) for blobs, plain-JS UI in `w
 - After each phase: review the diff, check the image (`docker history`, size, no secrets in layers), update `todo.md`.
 - Version lives in `VERSION` only.
 
+## Releases
+Do not edit `VERSION` by hand: CI bumps the patch number on every push to `main` (`scripts/bump-version.sh`) and
+builds the image from the bumped commit. Commits by CI carry `[skip ci]`.
+
 ## Commands
 `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, `docker compose build`.
 

@@ -52,6 +52,25 @@ impl S3BlobStore {
     }
 }
 
+impl S3BlobStore {
+    /// Checks that the bucket is reachable and creates it if it does not exist. Run once at
+    /// startup, so a wrong endpoint or key fails there and not on the first upload.
+    pub async fn ensure_bucket(&self) -> Result<(), BlobError> {
+        match self.client.head_bucket().bucket(&self.bucket).send().await {
+            Ok(_) => Ok(()),
+            Err(e) if e.as_service_error().is_some_and(|s| s.is_not_found()) => self
+                .client
+                .create_bucket()
+                .bucket(&self.bucket)
+                .send()
+                .await
+                .map(|_| ())
+                .map_err(storage),
+            Err(e) => Err(storage(e)),
+        }
+    }
+}
+
 #[async_trait]
 impl BlobStore for S3BlobStore {
     async fn start_multipart(&self, key: &str, content_type: &str) -> Result<String, BlobError> {
@@ -272,9 +291,11 @@ mod tests {
     use super::*;
     use futures_util::StreamExt;
 
-    fn store() -> S3BlobStore {
+    async fn store() -> S3BlobStore {
         dotenvy::dotenv().ok();
-        S3BlobStore::new(&StorageConfig::from_env().expect("storage settings in .env"))
+        let s = S3BlobStore::new(&StorageConfig::from_env().expect("storage settings in .env"));
+        s.ensure_bucket().await.expect("bucket is reachable");
+        s
     }
 
     fn key(name: &str) -> String {
@@ -290,6 +311,12 @@ mod tests {
         out
     }
 
+    #[tokio::test]
+    async fn ensure_bucket_is_idempotent() {
+        let s = store().await;
+        s.ensure_bucket().await.unwrap();
+    }
+
     #[test]
     fn content_range_parsing() {
         assert_eq!(parse_content_range("bytes 0-99/1000"), Some((0, 99, 1000)));
@@ -299,7 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn put_read_range_and_delete() {
-        let s = store();
+        let s = store().await;
         let k = key("small.txt");
         s.put(&k, Bytes::from_static(b"0123456789"), "text/plain")
             .await
@@ -322,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn multipart_upload_resume_and_complete() {
-        let s = store();
+        let s = store().await;
         let k = key("big.bin");
         let id = s
             .start_multipart(&k, "application/octet-stream")
@@ -347,7 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn abort_is_idempotent_and_unknown_uploads_are_not_found() {
-        let s = store();
+        let s = store().await;
         let k = key("abort.bin");
         let id = s.start_multipart(&k, "x").await.unwrap();
         s.abort_multipart(&k, &id).await.unwrap();

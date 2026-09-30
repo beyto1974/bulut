@@ -11,7 +11,7 @@
 - [x] 9. Web UI (from the chosen mockup), env badge, version footer
 - [x] 10. QR code: `/qr.svg` and dialog
 - [x] 11. Idle sweeper (7 days, from `.env`)
-- [ ] 12. CI (mirror the tako CI config), auto version bump, final image review
+- [x] 12. CI (mirrors the tako CI config), auto version bump, image review in CI
 
 ## Later
 - Folders support: the backend exists (tree, folder create, upload into a folder, breadcrumbs) and is disabled by

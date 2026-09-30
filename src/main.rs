@@ -47,6 +47,10 @@ async fn main() {
             std::process::exit(1);
         });
     let blobs = Arc::new(S3BlobStore::new(&storage));
+    if let Err(e) = blobs.ensure_bucket().await {
+        tracing::error!(error = %e, bucket = %storage.s3_bucket, "cannot reach the storage bucket");
+        std::process::exit(1);
+    }
 
     let sweep_every = Duration::from_secs(config.sweep_interval_secs.max(60));
     let addr = format!("0.0.0.0:{}", config.port);

@@ -1,0 +1,265 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
+  # Manual entry point, for a commit that ended up with no run at all. It only runs the checks:
+  # `release`, `publish` and `image-update-webhook` require a push to main, so a dispatch can
+  # never bump the version or publish an image.
+  #
+  #   gh workflow run ci.yml --ref main
+  workflow_dispatch:
+
+# Runs on main are never cancelled: a cancelled `release` could leave a bumped version without an image.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # A push to a branch that already has an open PR is checked twice, by the push and by the PR.
+  # The runner is also the development machine, so this job answers one question, "is this push
+  # already covered by a PR?", and the check jobs wait on it. A branch without a PR keeps its CI.
+  duplicate:
+    name: Push already covered by a PR?
+    runs-on: [self-hosted, linux, x64, sysbox]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.verdict.outputs.skip }}
+    steps:
+      - name: Verdict
+        id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BRANCH: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$EVENT" != "push" ] || [ "$REF" = "refs/heads/main" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Without gh, or when it fails, check anyway: an extra run is better than an unchecked push.
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! open=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq 'length' 2>&1); then
+            echo "gh pr list failed, running the checks anyway: $open" >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          case "$open" in
+            ''|*[!0-9]*)
+              echo "Unexpected answer from gh pr list, running the checks anyway: $open" >> "$GITHUB_STEP_SUMMARY"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if [ "$open" -gt 0 ]; then
+            echo "The open PR on $BRANCH already checks this tree." >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    name: Format, lint and tests
+    runs-on: [self-hosted, linux, x64, sysbox]
+    needs: [duplicate]
+    if: needs.duplicate.outputs.skip != 'true'
+    # A container job: Postgres and the S3 mock are reached by service name on their own ports, so nothing
+    # is published on the shared runner's host and nothing can collide with a development stack.
+    container: rust:1-bookworm
+    services:
+      db:
+        image: postgres:17
+        env:
+          POSTGRES_USER: bulut
+          POSTGRES_PASSWORD: bulut
+          POSTGRES_DB: bulut
+        # The database of a CI job is thrown away with the job, so keep it in memory.
+        options: >-
+          --health-cmd "pg_isready -U bulut"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data:rw,size=1g
+      s3:
+        image: adobe/s3mock:latest
+        env:
+          initialBuckets: bulut-ci
+    env:
+      DATABASE_URL: postgresql://bulut:bulut@db:5432/bulut
+      S3_ENDPOINT_URL: http://s3:9090
+      S3_BUCKET: bulut-ci
+      S3_ACCESS_KEY_ID: ci
+      S3_SECRET_ACCESS_KEY: ci-secret
+      S3_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install rustfmt and clippy
+        run: rustup component add rustfmt clippy
+
+      - name: Version script tests
+        run: sh scripts/test-bump-version.sh
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # The S3 mock needs a few seconds after its container reports started.
+      - name: Wait for the S3 mock
+        run: |
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null http://s3:9090/; then exit 0; fi
+            sleep 1
+          done
+          echo "the S3 mock did not come up" >&2
+          exit 1
+
+      - name: Test
+        run: cargo test --locked
+
+  # Builds the image on every check run, without publishing, so a broken Dockerfile shows up on the PR
+  # and not after the merge. Main builds and publishes in `publish` instead.
+  image:
+    name: Image builds
+    runs-on: [self-hosted, linux, x64, sysbox]
+    needs: [duplicate]
+    if: needs.duplicate.outputs.skip != 'true' && !(github.ref == 'refs/heads/main' && github.event_name == 'push')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: bulut:ci
+          cache-from: type=gha,scope=bulut
+          cache-to: type=gha,mode=max,scope=bulut
+
+      # The image must not carry local settings or secrets, and must stay small.
+      - name: Review the image
+        run: |
+          size=$(docker image inspect bulut:ci --format '{{.Size}}')
+          echo "Image size: $((size / 1024 / 1024)) MiB" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -gt 50000000 ]; then
+            echo "The image is larger than 50 MB." >&2
+            exit 1
+          fi
+          if docker history --no-trunc bulut:ci | grep -Ei 'password|secret|\.env|DATABASE_URL=|S3_SECRET'; then
+            echo "The image history mentions a setting or secret." >&2
+            exit 1
+          fi
+
+  # Main only: bump the patch version, commit it, and hand the new commit to `publish`.
+  # The version file is the single source: the binary embeds it, the UI footer and /api/version show it.
+  release:
+    name: Bump version
+    runs-on: [self-hosted, linux, x64, sysbox]
+    needs: [test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      sha: ${{ steps.commit.outputs.commit_hash }}
+    steps:
+      # The tip of main, not the pushed commit: a newer push may already have bumped the version.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Bump
+        id: bump
+        run: echo "version=$(sh scripts/bump-version.sh VERSION)" >> "$GITHUB_OUTPUT"
+
+      # `[skip ci]`: without it this commit would start another run that bumps again.
+      - name: Commit and tag
+        id: commit
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "chore(release): v${{ steps.bump.outputs.version }} [skip ci]"
+          file_pattern: VERSION
+          tagging_message: v${{ steps.bump.outputs.version }}
+
+  publish:
+    name: Build and push image
+    runs-on: [self-hosted, linux, x64, sysbox]
+    needs: [release]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.REGISTRY_URL != ''
+    permissions:
+      contents: read
+    outputs:
+      webhook_secret_set: ${{ steps.webhook_secret.outputs.set }}
+    steps:
+      - name: Checkout the bumped commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+
+      # A job-level `if` cannot read secrets, so the webhook job gates on this output instead.
+      - name: Check webhook secret
+        id: webhook_secret
+        env:
+          IMAGE_UPDATED_WEBHOOK_URL: ${{ secrets.IMAGE_UPDATED_WEBHOOK_URL }}
+        run: echo "set=${IMAGE_UPDATED_WEBHOOK_URL:+true}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to private registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ vars.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Compute image name
+        id: vars
+        run: |
+          echo "repo_lc=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          cache-from: type=gha,scope=bulut
+          cache-to: type=gha,mode=max,scope=bulut
+          tags: |
+            ${{ vars.REGISTRY_URL }}/${{ steps.vars.outputs.repo_lc }}:latest
+            ${{ vars.REGISTRY_URL }}/${{ steps.vars.outputs.repo_lc }}:${{ steps.vars.outputs.version }}
+            ${{ vars.REGISTRY_URL }}/${{ steps.vars.outputs.repo_lc }}:${{ steps.vars.outputs.sha_short }}
+
+  image-update-webhook:
+    name: Notify image webhook
+    runs-on: [self-hosted, linux, x64, sysbox]
+    needs: [publish]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.publish.outputs.webhook_secret_set == 'true'
+    steps:
+      - name: Call the webhook
+        env:
+          IMAGE_UPDATED_WEBHOOK_URL: ${{ secrets.IMAGE_UPDATED_WEBHOOK_URL }}
+        run: curl -sf -X POST --data-raw '' "$IMAGE_UPDATED_WEBHOOK_URL"
