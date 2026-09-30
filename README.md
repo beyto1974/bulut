@@ -73,7 +73,7 @@ docker run -d --name bulut \
   ghcr.io/beyto1974/bulut:latest
 ```
 
-`BASE_URL` is how the app is reached from outside. Short links and QR codes use it. The image is about 8 MB,
+`BASE_URL` is how the app is reached from outside. Short links and QR codes use it. The image is small (about 7 MB to pull, 26 MB on disk),
 has no shell, and runs as a non-root user. Images are tagged `latest`, `vX.Y.Z` and the short commit.
 
 The container answers `GET /healthz` and has a built-in health check.
