@@ -55,12 +55,22 @@ pub struct Config {
     pub app_env: AppEnv,
     pub log_level: String,
     pub port: u16,
+    /// Address to listen on. `0.0.0.0` (all interfaces) suits a container, `127.0.0.1` a bare install.
+    pub bind_addr: std::net::IpAddr,
     pub base_url: String,
     pub code_length: usize,
     pub chunk_size: usize,
     pub max_file_bytes: u64,
     /// Most files one session can hold. New versions of an existing file do not count.
     pub max_files_per_session: u32,
+    /// Most versions one file keeps.
+    pub max_versions_per_file: u32,
+    /// Most bytes of stored versions in one session.
+    pub max_session_bytes: u64,
+    /// Most unfinished chunked uploads in one session.
+    pub max_pending_uploads: u32,
+    /// Most tags on one version.
+    pub max_tags_per_version: u32,
     /// Folder support is built but switched off until the UI handles it.
     pub folders_enabled: bool,
     pub session_idle_ttl_days: u32,
@@ -93,6 +103,11 @@ impl Config {
             None => AppEnv::Production,
         };
         let port: u16 = num("PORT", get("PORT"), 8080)?;
+        let bind_addr: std::net::IpAddr = num(
+            "BIND_ADDR",
+            get("BIND_ADDR"),
+            std::net::Ipv4Addr::UNSPECIFIED.into(),
+        )?;
         let code_length: usize = num("CODE_LENGTH", get("CODE_LENGTH"), 5)?;
         if !(3..=12).contains(&code_length) {
             return Err(ConfigError::Invalid("CODE_LENGTH", code_length.to_string()));
@@ -113,6 +128,26 @@ impl Config {
                 "MAX_FILES_PER_SESSION",
                 max_files_per_session.to_string(),
             ));
+        }
+        let max_versions_per_file: u32 =
+            num("MAX_VERSIONS_PER_FILE", get("MAX_VERSIONS_PER_FILE"), 50)?;
+        let max_session_bytes: u64 = num(
+            "MAX_SESSION_BYTES",
+            get("MAX_SESSION_BYTES"),
+            10 * 1024 * 1024 * 1024,
+        )?;
+        let max_pending_uploads: u32 = num("MAX_PENDING_UPLOADS", get("MAX_PENDING_UPLOADS"), 10)?;
+        let max_tags_per_version: u32 =
+            num("MAX_TAGS_PER_VERSION", get("MAX_TAGS_PER_VERSION"), 20)?;
+        for (key, value) in [
+            ("MAX_VERSIONS_PER_FILE", u64::from(max_versions_per_file)),
+            ("MAX_SESSION_BYTES", max_session_bytes),
+            ("MAX_PENDING_UPLOADS", u64::from(max_pending_uploads)),
+            ("MAX_TAGS_PER_VERSION", u64::from(max_tags_per_version)),
+        ] {
+            if value == 0 || value > i64::MAX as u64 {
+                return Err(ConfigError::Invalid(key, value.to_string()));
+            }
         }
         let folders_enabled = match get("FOLDERS_ENABLED") {
             None => false,
@@ -138,6 +173,7 @@ impl Config {
             app_env,
             log_level: get("LOG_LEVEL").unwrap_or("info").to_ascii_lowercase(),
             port,
+            bind_addr,
             base_url: get("BASE_URL")
                 .map(|v| v.trim_end_matches('/').to_string())
                 .unwrap_or_else(|| format!("http://localhost:{port}")),
@@ -145,6 +181,10 @@ impl Config {
             chunk_size,
             max_file_bytes,
             max_files_per_session,
+            max_versions_per_file,
+            max_session_bytes,
+            max_pending_uploads,
+            max_tags_per_version,
             folders_enabled,
             session_idle_ttl_days,
             sweep_interval_secs: num("SWEEP_INTERVAL_SECS", get("SWEEP_INTERVAL_SECS"), 3600)?,
@@ -169,11 +209,21 @@ mod tests {
         assert_eq!(c.app_env, AppEnv::Production);
         assert_eq!(c.log_level, "info");
         assert_eq!(c.port, 8080);
+        assert_eq!(c.bind_addr.to_string(), "0.0.0.0");
         assert_eq!(c.code_length, 5);
         assert_eq!(c.session_idle_ttl_days, 7);
         assert_eq!(c.max_file_bytes, 1024 * 1024 * 1024);
         assert!(!c.folders_enabled, "folders are off by default");
         assert_eq!(c.max_files_per_session, 100);
+        assert_eq!(
+            (
+                c.max_versions_per_file,
+                c.max_pending_uploads,
+                c.max_tags_per_version
+            ),
+            (50, 10, 20)
+        );
+        assert_eq!(c.max_session_bytes, 10 * 1024 * 1024 * 1024);
         assert_eq!(c.base_url, "http://localhost:8080");
     }
 
@@ -199,12 +249,28 @@ mod tests {
     fn rejects_bad_values() {
         assert!(Config::from_map(&vars(&[("APP_ENV", "staging")])).is_err());
         assert!(Config::from_map(&vars(&[("PORT", "abc")])).is_err());
+        assert!(Config::from_map(&vars(&[("BIND_ADDR", "everywhere")])).is_err());
+        assert_eq!(
+            Config::from_map(&vars(&[("BIND_ADDR", "127.0.0.1")]))
+                .unwrap()
+                .bind_addr
+                .to_string(),
+            "127.0.0.1"
+        );
         assert!(Config::from_map(&vars(&[("CODE_LENGTH", "1")])).is_err());
         assert!(Config::from_map(&vars(&[("CHUNK_SIZE", "1024")])).is_err());
         assert!(Config::from_map(&vars(&[("SESSION_IDLE_TTL_DAYS", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("FOLDERS_ENABLED", "maybe")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILES_PER_SESSION", "0")])).is_err());
+        for key in [
+            "MAX_VERSIONS_PER_FILE",
+            "MAX_SESSION_BYTES",
+            "MAX_PENDING_UPLOADS",
+            "MAX_TAGS_PER_VERSION",
+        ] {
+            assert!(Config::from_map(&vars(&[(key, "0")])).is_err(), "{key}");
+        }
         assert!(Config::from_map(&vars(&[("MAX_FILES_PER_SESSION", "many")])).is_err());
         // 100 GB in 8 MiB parts is 11920 parts, more than S3 allows.
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "100000000000")])).is_err());

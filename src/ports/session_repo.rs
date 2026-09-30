@@ -9,8 +9,8 @@ pub enum RepoError {
     CodeTaken,
     #[error("name already exists in this folder")]
     NameTaken,
-    #[error("session file limit reached ({0})")]
-    LimitReached(i64),
+    #[error("limit reached: {0}")]
+    LimitReached(String),
     #[error("not found")]
     NotFound,
     #[error("invalid: {0}")]
@@ -46,4 +46,25 @@ pub trait SessionRepo: Send + Sync {
 
     /// Codes of sessions whose last activity is at or before `cutoff`.
     async fn idle_before(&self, cutoff: DateTime<Utc>) -> Result<Vec<String>, RepoError>;
+}
+
+impl RepoError {
+    pub fn files_limit(max: i64) -> Self {
+        Self::LimitReached(format!(
+            "this session already holds the maximum of {max} files, delete one or start another session"
+        ))
+    }
+
+    pub fn versions_limit(max: i64) -> Self {
+        Self::LimitReached(format!(
+            "this file already has the maximum of {max} versions, delete it or use another name"
+        ))
+    }
+
+    pub fn bytes_limit(max: i64) -> Self {
+        Self::LimitReached(format!(
+            "this upload would take the session past its storage limit of {}, delete files first",
+            crate::llms::human_size(max)
+        ))
+    }
 }

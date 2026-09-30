@@ -26,6 +26,8 @@ pub struct Walk {
 
 pub struct TreeService {
     pub folders_enabled: bool,
+    /// Most tags per version.
+    pub max_tags: u32,
     pub nodes: Arc<dyn NodeRepo>,
     pub blobs: Arc<dyn BlobStore>,
     pub clock: Arc<dyn Clock>,
@@ -225,6 +227,19 @@ impl TreeService {
         tag: &str,
     ) -> Result<FileVersion, ServiceError> {
         let tag = validate_tag(tag).map_err(|m| ServiceError::Invalid(m.into()))?;
+        // Tags stored on the version. `latest` is added on top for the newest one and is not stored.
+        let (_, current) = self.resolve_version(session, version).await?;
+        let stored = current
+            .tags
+            .iter()
+            .filter(|t| t.as_str() != "latest")
+            .count();
+        if !current.tags.contains(&tag) && stored >= self.max_tags as usize {
+            return Err(ServiceError::Conflict(format!(
+                "a version can have at most {} tags, remove one first",
+                self.max_tags
+            )));
+        }
         Ok(self.nodes.add_tag(session, version, &tag).await?)
     }
 

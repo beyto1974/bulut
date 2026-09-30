@@ -72,7 +72,7 @@ async fn main() {
     }
 
     let sweep_every = Duration::from_secs(config.sweep_interval_secs.max(60));
-    let addr = format!("0.0.0.0:{}", config.port);
+    let addr = std::net::SocketAddr::new(config.bind_addr, config.port).to_string();
     let env = config.app_env.as_str();
     let idle_days = config.session_idle_ttl_days;
     let state = app::build_state(config, pool, blobs, VERSION);

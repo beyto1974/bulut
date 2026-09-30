@@ -6,7 +6,7 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::adapters::postgres::PgSessionRepo;
-use crate::adapters::postgres_nodes::PgNodeRepo;
+use crate::adapters::postgres_nodes::{Limits, PgNodeRepo};
 use crate::adapters::postgres_uploads::PgUploadRepo;
 use crate::config::Config;
 use crate::http::AppState;
@@ -23,9 +23,11 @@ pub fn build_state(
     blobs: Arc<dyn BlobStore>,
     version: &'static str,
 ) -> AppState {
-    let nodes = Arc::new(
-        PgNodeRepo::new(pool.clone()).with_max_files(i64::from(config.max_files_per_session)),
-    );
+    let nodes = Arc::new(PgNodeRepo::new(pool.clone()).with_limits(Limits {
+        max_files: i64::from(config.max_files_per_session),
+        max_versions_per_file: i64::from(config.max_versions_per_file),
+        max_session_bytes: i64::try_from(config.max_session_bytes).unwrap_or(i64::MAX),
+    }));
     let clock = Arc::new(SystemClock);
     let uploads = Arc::new(UploadService {
         folders_enabled: config.folders_enabled,
@@ -36,6 +38,8 @@ pub fn build_state(
         part_size: config.chunk_size,
         max_file_bytes: config.max_file_bytes,
         max_files: config.max_files_per_session,
+        max_pending: config.max_pending_uploads,
+        max_tags: config.max_tags_per_version,
     });
     let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),
@@ -49,6 +53,7 @@ pub fn build_state(
     });
     let tree = Arc::new(TreeService {
         folders_enabled: config.folders_enabled,
+        max_tags: config.max_tags_per_version,
         nodes,
         blobs,
         clock,

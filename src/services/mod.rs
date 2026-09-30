@@ -8,6 +8,8 @@ mod folder_flag_tests;
 #[cfg(test)]
 pub(crate) mod limit_tests;
 #[cfg(test)]
+mod quota_tests;
+#[cfg(test)]
 pub(crate) mod tests;
 #[cfg(test)]
 mod upload_tests;

@@ -31,5 +31,10 @@ it, guessing a session code, or reading the files of a session whose code you kn
   and use a read-only root filesystem.
 - Uploaded files are served as downloads with `nosniff` and a sandboxing `Content-Security-Policy`, never
   rendered on the application's origin. The UI has a strict CSP without inline scripts or styles.
-- Names, tags and sizes are validated, and file counts and sizes are limited per session.
+- Names, tags and sizes are validated. Files, versions, bytes, unfinished uploads and tags are limited per session,
+  enforced in the database so parallel uploads cannot exceed them.
+- The MCP endpoint only accepts JSON and refuses browser requests from another origin, so a web page cannot make
+  a browser that has cached basic-auth credentials write through it.
+- Text that users write (notes, descriptions, names) cannot add lines or structure to `llms.txt`, and the text
+  tells readers to treat it as data.
 - Secrets are read from the environment and never logged.

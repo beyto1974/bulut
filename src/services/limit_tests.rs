@@ -25,6 +25,8 @@ pub(crate) async fn limited_uploads(f: &Fixture, max: u32) -> UploadService {
         part_size: 10,
         max_file_bytes: 1000,
         max_files: max,
+        max_pending: 1000,
+        max_tags: 1000,
     }
 }
 

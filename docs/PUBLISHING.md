@@ -7,9 +7,8 @@ to publish.
 
 - [x] **License.** MIT, in `LICENSE`, with the GitHub handle as the copyright holder. Change the name there if
   you want your own name on it.
-- [ ] **Read `CLAUDE.md` and `todo.md`.** They are notes for working on the project and mention tools and
-  conventions of the machine it was built on (`freeport`, `devdb`, `devgarage`, shared dev services). Trim or
-  keep them as you prefer; they contain no secrets.
+- [x] **`CLAUDE.md` and `todo.md`.** They were trimmed of notes about the machine the project was built on.
+  `todo.md` is a public roadmap with known limits. Read them once more and keep what you want shown.
 - [ ] **Decide who may push to `main`.** The release job pushes the version bump to `main` with the workflow
   token. A rule that requires pull requests for `main` must let the GitHub Actions app bypass it, or the bump
   fails. Make a pull request the normal way in, and keep direct pushes for the release job only.
@@ -72,7 +71,29 @@ repository through the `org.opencontainers.image.source` label.
 The README opens with the fact that Bulut has no authentication and must run behind basic auth and a bearer
 token. Keep that warning where it is.
 
-## What the last review looked at
+## Security review before publication
 
-The security review made before publishing is summarised in the pull request or commit that added this file.
-Decisions left to you are the license, the tone of `CLAUDE.md`, and the branch rules above.
+A review of the whole tree was made before the first push (code, workflows, Dockerfile, examples and the
+contents of the repository). Findings and what was done:
+
+| Finding | Severity | Status |
+| --- | --- | --- |
+| `/mcp` accepted any content type and any `Origin`, so a web page could make a browser with cached basic-auth credentials write through it | medium | Fixed: JSON only, other origins refused |
+| One session could be filled without limit through versions, bytes, unfinished uploads or tags | medium | Fixed: `MAX_VERSIONS_PER_FILE`, `MAX_SESSION_BYTES`, `MAX_PENDING_UPLOADS`, `MAX_TAGS_PER_VERSION`, enforced in the database under a lock |
+| Notes and descriptions could fake headings and links in `llms.txt` with `\r` or `U+2028` | low | Fixed, and the text says user text is data |
+| Script injection pattern and unlocked npm install in CI | low | Fixed: values go through `env`, the version is validated, the e2e dependency has a lockfile |
+| Dependencies with advisories (old `hyper`, `h2`, `rustls`, `rustls-webpki` from the AWS SDK's legacy TLS feature) | medium | Fixed: modern HTTPS client, `cargo audit` is clean. One advisory (`rsa`) is ignored on purpose, it is only in the lockfile through an optional, unused MySQL driver (see `.cargo/audit.toml`) |
+| Content type accepted any ASCII, including control characters | info | Fixed: printable characters only |
+| Notes about the build machine in `CLAUDE.md` and `todo.md` | info | Fixed |
+| Memory held per in-flight part before the upload id is checked, no read timeouts | low | Not changed: connection limits and timeouts belong to the reverse proxy, the README says so |
+| Unlimited number of sessions, and any request keeps a session alive | design | Not changed: rate limits belong to the proxy. A session code is an identifier, not a secret |
+| Objects can stay in the bucket if a session is purged while an upload into it completes | low | Not changed, listed in `todo.md` |
+
+Checked and fine: every SQL statement is parameterised, every lookup by id is scoped to the session, object
+keys are made only of the validated code and a random id, downloads are attachments with a sandboxing CSP,
+the UI builds the page with DOM calls only under a strict CSP, secrets are not logged, the image holds only the
+binary and runs as non-root, and the workflows use no `pull_request_target`, minimal permissions and pinned
+actions.
+
+Decisions left to you: the branch rules above, and whether the copyright line in `LICENSE` should carry your
+name instead of the GitHub handle.

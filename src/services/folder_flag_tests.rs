@@ -17,6 +17,7 @@ async fn folders_are_refused_when_disabled_but_root_files_still_work() {
 
     let tree = TreeService {
         folders_enabled: false,
+        max_tags: 1000,
         nodes: f.tree.nodes.clone(),
         blobs: f.tree.blobs.clone(),
         clock: f.tree.clock.clone(),
@@ -30,6 +31,8 @@ async fn folders_are_refused_when_disabled_but_root_files_still_work() {
         part_size: 10,
         max_file_bytes: 1000,
         max_files: 1000,
+        max_pending: 1000,
+        max_tags: 1000,
     };
 
     assert!(matches!(

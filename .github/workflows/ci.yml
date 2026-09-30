@@ -153,18 +153,21 @@ jobs:
         with:
           node-version: "24"
 
+      # From the lockfile in e2e/, so the test tooling is the same on every run.
       - name: Install Playwright
-        run: npm install --no-save --no-audit --no-fund playwright@1.62.1
+        working-directory: e2e
+        run: npm ci --no-audit --no-fund
 
-      # Keyed on the Playwright version, so a browser download only happens when it is bumped.
+      # Keyed on the lockfile, so a browser download only happens when Playwright is bumped.
       - name: Cache the browsers
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-1.62.1
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
 
       # --only-shell: the suite is headless, so the headless shell is all it needs.
       - name: Install the browsers
+        working-directory: e2e
         run: npx playwright install --with-deps --only-shell chromium
 
       - name: Start object storage
@@ -309,11 +312,14 @@ jobs:
 
       - name: Name and version
         id: vars
+        env:
+          REPO: ${{ github.repository }}
         run: |
-          echo "repo_lc=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "repo_lc=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
           echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           version=$(tr -d '[:space:]' < VERSION)
-          test -n "$version" || { echo "could not read VERSION"; exit 1; }
+          # The version is used in image tags and in a webhook body, so it has to be a plain version.
+          printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "VERSION is not MAJOR.MINOR.PATCH"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # Built once and loaded, before the build that publishes: the layers come from the cache, and
@@ -361,10 +367,14 @@ jobs:
 
       - name: Say what was published
         if: steps.registry.outputs.publish == 'true'
+        env:
+          IMAGE: ghcr.io/${{ steps.vars.outputs.repo_lc }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          SHA: ${{ steps.vars.outputs.sha_short }}
         run: |
           {
-            echo "Published \`ghcr.io/${{ steps.vars.outputs.repo_lc }}:v${{ steps.vars.outputs.version }}\`"
-            echo "(and \`latest\`, \`${{ steps.vars.outputs.sha_short }}\`)."
+            echo "Published \`$IMAGE:v$VERSION\`"
+            echo "(and \`latest\`, \`$SHA\`)."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Tells a server there is something new to pull. Optional: it only runs when the secret exists,
@@ -379,6 +389,8 @@ jobs:
       - name: Call the deploy hook
         env:
           HOOK_URL: ${{ secrets.IMAGE_UPDATED_WEBHOOK_URL }}
+          VERSION: ${{ needs.image.outputs.version }}
+          SHA: ${{ needs.image.outputs.sha_short }}
         run: |
           set -uo pipefail
           if [ -z "${HOOK_URL:-}" ]; then
@@ -389,7 +401,7 @@ jobs:
           # POST, not GET: a receiver typically answers 405 to anything else.
           body=$(curl -sS -X POST -w '\n%{http_code}' "$HOOK_URL" \
             -H 'content-type: application/json' \
-            -d '{"image":"${{ needs.image.outputs.version }}","sha":"${{ needs.image.outputs.sha_short }}"}') || {
+            -d "{\"image\":\"$VERSION\",\"sha\":\"$SHA\"}") || {
               echo "the hook could not be reached"
               exit 1
             }
@@ -407,4 +419,4 @@ jobs:
           esac
 
           [ "$status" = "200" ] || { echo "the hook answered $status"; exit 1; }
-          echo "Deployment hook called for v${{ needs.image.outputs.version }}." >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployment hook called for v$VERSION." >> "$GITHUB_STEP_SUMMARY"

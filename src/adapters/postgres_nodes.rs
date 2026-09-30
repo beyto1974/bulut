@@ -20,23 +20,49 @@ fn is_unique(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(d) if d.is_unique_violation())
 }
 
+/// What one session may hold. Checked when a version is added, under a lock per session, so
+/// parallel uploads cannot overshoot.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    /// Files (names). New versions of an existing file do not count.
+    pub max_files: i64,
+    pub max_versions_per_file: i64,
+    /// Sum of the sizes of all stored versions.
+    pub max_session_bytes: i64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_files: i64::MAX,
+            max_versions_per_file: i64::MAX,
+            max_session_bytes: i64::MAX,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PgNodeRepo {
     pool: PgPool,
-    max_files: i64,
+    limits: Limits,
 }
 
 impl PgNodeRepo {
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
-            max_files: i64::MAX,
+            limits: Limits::default(),
         }
+    }
+
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Most files one session may hold. New versions of an existing file do not count.
     pub fn with_max_files(mut self, max_files: i64) -> Self {
-        self.max_files = max_files;
+        self.limits.max_files = max_files;
         self
     }
 }
@@ -120,6 +146,14 @@ impl PgNodeRepo {
         let mut tx = self.pool.begin().await.map_err(storage)?;
         check_parent(&mut tx, session, parent).await?;
 
+        // Every limit below is checked and used under this one lock per session, so parallel
+        // uploads cannot push the session past them. The lock ends with the transaction.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(session)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage)?;
+
         let existing = sqlx::query(&format!(
             "SELECT {NODE_COLS} FROM nodes
              WHERE session_code = $1 AND parent_id IS NOT DISTINCT FROM $2::uuid AND name = $3
@@ -138,16 +172,19 @@ impl PgNodeRepo {
                 if node.kind == NodeKind::Folder {
                     return Err(RepoError::NameTaken);
                 }
+                let versions: i64 =
+                    sqlx::query("SELECT count(*) AS n FROM file_versions WHERE node_id = $1")
+                        .bind(node.id)
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(storage)?
+                        .get("n");
+                if versions >= self.limits.max_versions_per_file {
+                    return Err(RepoError::versions_limit(self.limits.max_versions_per_file));
+                }
                 node
             }
             None => {
-                // Count and insert under one lock per session, so parallel uploads of new names
-                // cannot push the session past its limit. The lock ends with the transaction.
-                sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                    .bind(session)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(storage)?;
                 let files: i64 = sqlx::query(
                     "SELECT count(*) AS n FROM nodes WHERE session_code = $1 AND kind = 'file'",
                 )
@@ -156,8 +193,8 @@ impl PgNodeRepo {
                 .await
                 .map_err(storage)?
                 .get("n");
-                if files >= self.max_files {
-                    return Err(RepoError::LimitReached(self.max_files));
+                if files >= self.limits.max_files {
+                    return Err(RepoError::files_limit(self.limits.max_files));
                 }
                 let inserted = sqlx::query(&format!(
                     "INSERT INTO nodes (id, session_code, parent_id, kind, name, created_at)
@@ -179,6 +216,19 @@ impl PgNodeRepo {
                 }
             }
         };
+
+        let used: i64 = sqlx::query(
+            "SELECT COALESCE(SUM(v.size), 0)::bigint AS n FROM file_versions v
+             JOIN nodes n ON n.id = v.node_id WHERE n.session_code = $1",
+        )
+        .bind(session)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(storage)?
+        .get("n");
+        if used.saturating_add(new.size) > self.limits.max_session_bytes {
+            return Err(RepoError::bytes_limit(self.limits.max_session_bytes));
+        }
 
         let next: i32 = sqlx::query(
             "SELECT COALESCE(MAX(version), 0) + 1 AS next FROM file_versions WHERE node_id = $1",
@@ -748,7 +798,7 @@ mod tests {
         let stored = results.iter().filter(|r| r.is_ok()).count();
         let refused = results
             .iter()
-            .filter(|r| matches!(r, Err(RepoError::LimitReached(3))))
+            .filter(|r| matches!(r, Err(RepoError::LimitReached(m)) if m.contains("maximum of 3 files")))
             .count();
         assert_eq!((stored, refused), (2, 4));
         assert_eq!(repo.count_files(&s).await.unwrap(), 3);
@@ -762,6 +812,90 @@ mod tests {
         repo.add_version(&s, None, "again", nv("k-new", 1), now)
             .await
             .unwrap();
+        sessions.delete(&s).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn versions_per_file_and_bytes_per_session_are_limited_even_in_parallel() {
+        let (repo, sessions, s) = setup().await;
+        let repo = repo.with_limits(Limits {
+            max_files: 100,
+            max_versions_per_file: 3,
+            max_session_bytes: 100,
+        });
+        let now = Utc::now();
+        for i in 0..3 {
+            repo.add_version(&s, None, "a", nv(&format!("a{i}"), 10), now)
+                .await
+                .unwrap();
+        }
+        // A fourth version is refused, another file is not affected.
+        let err = repo
+            .add_version(&s, None, "a", nv("a3", 10), now)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, RepoError::LimitReached(m) if m.contains("maximum of 3 versions")),
+            "{err}"
+        );
+        repo.add_version(&s, None, "b", nv("b0", 60), now)
+            .await
+            .unwrap();
+
+        // 90 bytes are used. 20 more would pass 100, 10 more fit exactly.
+        let err = repo
+            .add_version(&s, None, "c", nv("c0", 20), now)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, RepoError::LimitReached(m) if m.contains("storage limit")),
+            "{err}"
+        );
+        repo.add_version(&s, None, "c", nv("c0", 10), now)
+            .await
+            .unwrap();
+        assert!(
+            repo.add_version(&s, None, "c", nv("c1", 1), now)
+                .await
+                .is_err(),
+            "100 of 100 bytes used"
+        );
+
+        // Parallel versions of "b" (1 version, limit 3, bytes already full): all refused, none lost.
+        let (repo2, s2) = (repo.clone(), s.clone());
+        let results = tokio::spawn(async move {
+            let mut out = Vec::new();
+            for i in 0..4 {
+                out.push(
+                    repo2
+                        .add_version(&s2, None, "b", nv(&format!("b{}", i + 1), 0), Utc::now())
+                        .await,
+                );
+            }
+            out
+        })
+        .await
+        .unwrap();
+        // Zero-byte versions fit the byte limit, so exactly two more fit the version limit.
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 2);
+        let mut handles = Vec::new();
+        for i in 0..6 {
+            let (repo, s) = (repo.clone(), s.clone());
+            handles.push(tokio::spawn(async move {
+                repo.add_version(&s, None, "d", nv(&format!("d{i}"), 0), Utc::now())
+                    .await
+            }));
+        }
+        let mut stored = 0;
+        for h in handles {
+            if h.await.unwrap().is_ok() {
+                stored += 1;
+            }
+        }
+        assert_eq!(
+            stored, 3,
+            "six parallel uploads of a new name, three versions fit"
+        );
         sessions.delete(&s).await.unwrap();
     }
 

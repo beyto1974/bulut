@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+  # rsa (Marvin timing attack, no fixed version exists) is in Cargo.lock only because sqlx lists
+  # sqlx-mysql as an optional dependency. Bulut uses Postgres, and `cargo tree -i rsa` shows the
+  # crate is not part of the build. Remove this line when sqlx stops locking it.
+  "RUSTSEC-2023-0071",
+]

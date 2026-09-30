@@ -71,11 +71,20 @@ pub struct UploadService {
     pub part_size: usize,
     pub max_file_bytes: u64,
     pub max_files: u32,
+    /// Most unfinished chunked uploads per session.
+    pub max_pending: u32,
+    /// Most tags per version.
+    pub max_tags: u32,
 }
 
 fn clean_content_type(ct: Option<String>) -> String {
     ct.map(|c| c.trim().to_string())
-        .filter(|c| !c.is_empty() && c.len() <= 255 && c.is_ascii() && c.contains('/'))
+        .filter(|c| {
+            !c.is_empty()
+                && c.len() <= 255
+                && c.contains('/')
+                && c.chars().all(|ch| ch.is_ascii_graphic() || ch == ' ')
+        })
         .unwrap_or_else(|| "application/octet-stream".to_string())
 }
 
@@ -108,7 +117,7 @@ impl UploadService {
         }
         if self.nodes.count_files(session).await? >= i64::from(self.max_files) {
             return Err(
-                crate::ports::session_repo::RepoError::LimitReached(i64::from(self.max_files))
+                crate::ports::session_repo::RepoError::files_limit(i64::from(self.max_files))
                     .into(),
             );
         }
@@ -153,6 +162,13 @@ impl UploadService {
         self.check_size(new.size as u64)?;
         self.check_parent(session, new.parent).await?;
         self.check_room(session, new.parent, &name).await?;
+        // Every unfinished upload holds space in the store until it is finished or abandoned.
+        if self.uploads.for_session(session).await?.len() >= self.max_pending as usize {
+            return Err(ServiceError::Conflict(format!(
+                "this session already has {} unfinished uploads, finish or cancel one first",
+                self.max_pending
+            )));
+        }
 
         let content_type = clean_content_type(new.content_type);
         let blob_key = format!("{session}/{}", Uuid::new_v4());
@@ -372,6 +388,12 @@ impl UploadService {
             .collect::<Result<_, _>>()?;
         self.check_parent(session, parent).await?;
         self.check_room(session, parent, &name).await?;
+        if tags.len() > self.max_tags as usize {
+            return Err(ServiceError::Invalid(format!(
+                "a version can have at most {} tags",
+                self.max_tags
+            )));
+        }
         let content_type = clean_content_type(content_type);
         let key = format!("{session}/{}", Uuid::new_v4());
         let upload_id = self.blobs.start_multipart(&key, &content_type).await?;
@@ -453,5 +475,36 @@ impl UploadService {
             version = self.nodes.add_tag(session, version.id, tag).await?;
         }
         Ok((node, version))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_content_type;
+
+    #[test]
+    fn content_types_are_printable_and_look_like_one() {
+        assert_eq!(
+            clean_content_type(Some("text/plain; charset=utf-8".into())),
+            "text/plain; charset=utf-8"
+        );
+        for bad in [
+            "",
+            "plain",
+            "text/plain\r\nX-Evil: 1",
+            "text/\u{0}plain",
+            "tëxt/plain",
+        ] {
+            assert_eq!(
+                clean_content_type(Some(bad.into())),
+                "application/octet-stream",
+                "{bad:?}"
+            );
+        }
+        assert_eq!(clean_content_type(None), "application/octet-stream");
+        assert_eq!(
+            clean_content_type(Some(format!("a/{}", "b".repeat(300)))),
+            "application/octet-stream"
+        );
     }
 }

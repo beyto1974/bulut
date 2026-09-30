@@ -51,6 +51,8 @@ pub async fn fixture() -> Fixture {
         part_size: 10,
         max_file_bytes: 1000,
         max_files: 1000,
+        max_pending: 1000,
+        max_tags: 1000,
     });
     let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),
@@ -64,6 +66,7 @@ pub async fn fixture() -> Fixture {
     });
     let tree = Arc::new(TreeService {
         folders_enabled: true,
+        max_tags: 1000,
         nodes: nodes.clone(),
         blobs: blobs.clone(),
         clock: clock.clone(),

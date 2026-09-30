@@ -1,0 +1,8 @@
+{
+  "name": "bulut-e2e",
+  "private": true,
+  "description": "Browser test of the web UI. Install with `npm ci` inside this directory.",
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -20,9 +20,7 @@ impl From<RepoError> for ServiceError {
             RepoError::NameTaken => {
                 Self::Conflict("a file or folder with this name already exists here".into())
             }
-            RepoError::LimitReached(n) => Self::Conflict(format!(
-                "this session already holds the maximum of {n} files, delete one or start another session"
-            )),
+            RepoError::LimitReached(message) => Self::Conflict(message),
             RepoError::CodeTaken => Self::Conflict("code already taken".into()),
             RepoError::Invalid(m) => Self::Invalid(m),
             RepoError::Storage(m) => Self::Storage(m),

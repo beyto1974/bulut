@@ -1,30 +1,19 @@
-# Todo
+# Roadmap
 
-## Phases
-- [x] 1. Scaffold: config, JSON logging, `/healthz`, `/api/version`, Dockerfile, compose, docs
-- [x] 2. Domain: `ShortCode` and code generator
-- [x] 3. Persistence: migrations, `SessionRepo` on Postgres, `last_activity_at`
-- [x] 4. Sessions and tree API
-- [x] 5. S3 blob store, chunked resumable uploads, range downloads
-- [x] 6. Versions, tags, created and uploaded times
-- [x] 8. Agent access: `llms.txt`, MCP tools
-- [x] 9. Web UI (from the chosen mockup), env badge, version footer
-- [x] 10. QR code: `/qr.svg` and dialog
-- [x] 11. Idle sweeper (7 days, from `.env`)
-- [x] 12. CI (mirrors the tako CI config), auto version bump, image review in CI
+Ideas and known limits, roughly in order of usefulness.
 
-## Known issues from the code review (not fixed yet)
-- `llms.txt` and MCP `get_session` run one query per file and per folder (up to 1000 files). Batch the versions
-  into one query and index the latest versions by node id instead of searching a list.
-- `complete` deletes the stored file and forgets the upload when the database fails after the object store
-  finished the upload, so the client has to send the whole file again. Keep the upload row and let `complete`
-  be retried.
-- Nothing checks a name clash with a folder at `init`, only at `complete`. Not reachable while folders are off.
+## Known limits
+- `llms.txt` and the MCP `get_session` tool run one query per file (up to 1000 files). Batch the versions into one
+  query.
+- If the database fails right after the object store finished a chunked upload, `complete` discards the stored
+  file and the client has to send it again. Keep the upload row so `complete` can be retried.
+- Files of a session that is purged while an upload into it completes can stay in the bucket. A periodic
+  comparison of the bucket with the database (or a lifecycle rule) would clean them up.
+- There is no limit on the number of sessions. Put request rate limits and timeouts on the reverse proxy.
 
 ## Later
-- Folders support: the backend exists (tree, folder create, upload into a folder, breadcrumbs) and is disabled by
-  `FOLDERS_ENABLED=false`. To finish: folder navigation and creation in the UI, folder notes, `llms.txt` and MCP
-  wording, then switch the default on. Nothing in the UI or docs promises folders until then.
-- Thumbnails for images (the `thumb_key` column and `has_thumbnail` field already exist, the UI shows a file icon until then)
-- Mail and OTP, themed HTML mails (not planned: access control is handled by Traefik)
-- Per-file QR code
+- Folders. The backend exists (tree, folder creation, uploads into a folder, breadcrumbs) and is switched off with
+  `FOLDERS_ENABLED=false`. Still to do: folder navigation and creation in the UI, folder notes, `llms.txt` and MCP
+  wording, then switch the default on.
+- Thumbnails for images (the `thumb_key` column and `has_thumbnail` field already exist, the UI shows a file icon).
+- A QR code per file.

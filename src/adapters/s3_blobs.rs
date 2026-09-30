@@ -30,7 +30,15 @@ impl S3BlobStore {
             None,
             "bulut-env",
         );
+        // The HTTPS client is chosen here: rustls 0.23 on hyper 1. The SDK's own default would pull
+        // in the legacy hyper 0.14 and rustls 0.21 stack, which has open security advisories.
+        let http_client = aws_smithy_http_client::Builder::new()
+            .tls_provider(aws_smithy_http_client::tls::Provider::Rustls(
+                aws_smithy_http_client::tls::rustls_provider::CryptoMode::AwsLc,
+            ))
+            .build_https();
         let mut builder = aws_sdk_s3::Config::builder()
+            .http_client(http_client)
             .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
             .region(Region::new(cfg.s3_region.clone()))
             .credentials_provider(creds)

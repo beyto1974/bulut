@@ -35,6 +35,9 @@ Run it behind a reverse proxy (Traefik, nginx, Caddy, ...) that requires
 Do not publish the port directly. The examples below bind to `127.0.0.1` for this reason. Configuring the proxy
 is up to you and is not covered here.
 
+The proxy is also where request rate limits, connection limits and read timeouts belong: Bulut limits what one
+session can hold, but it does not limit how many sessions are created or how slowly a client may send a body.
+
 ## Quick start with Docker Compose
 
 `examples/` has a complete stack: Bulut, Postgres and [Garage](https://garagehq.deuxfleurs.fr/) for storage.
@@ -85,10 +88,15 @@ The container answers `GET /healthz` and has a built-in health check.
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | required | Credentials for the bucket. |
 | `S3_REGION` | `us-east-1` | Region. Garage uses `garage`. |
 | `BASE_URL` | `http://localhost:PORT` | Public address, used for links and QR codes. |
-| `PORT` | `8080` | Port inside the container. |
+| `PORT` | `8080` | Port to listen on. |
+| `BIND_ADDR` | `0.0.0.0` | Address to listen on. Use `127.0.0.1` for a bare install behind a local proxy. |
 | `APP_ENV` | `production` | `production`, `testing` or `development`. Anything but production is shown in the page title and header. |
 | `LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` or `trace`. Logs are JSON lines on stdout. |
 | `MAX_FILES_PER_SESSION` | `100` | Most files in one session. New versions do not count. |
+| `MAX_VERSIONS_PER_FILE` | `50` | Most versions one file keeps. |
+| `MAX_SESSION_BYTES` | `10737418240` | Most bytes of stored files in one session (10 GiB). |
+| `MAX_PENDING_UPLOADS` | `10` | Most unfinished chunked uploads in one session. |
+| `MAX_TAGS_PER_VERSION` | `20` | Most tags on one version. |
 | `MAX_FILE_BYTES` | `1073741824` | Largest file, 1 GiB. |
 | `CHUNK_SIZE` | `8388608` | Upload part size, at least 5 MiB. The file limit must fit in 10000 parts. |
 | `SESSION_IDLE_TTL_DAYS` | `7` | Days without activity before a session and its files are deleted. |
@@ -134,7 +142,8 @@ cargo run
 `src/services` the logic, `src/http` the routes, `src/llms.rs` the text indexes and `src/qr.rs` the QR code.
 The UI is plain HTML, CSS and JavaScript in `web/`, embedded in the binary, with no build step.
 
-End-to-end scripts run against a running instance (the browser test needs Playwright with Chromium):
+End-to-end scripts run against a running instance. The browser test needs Playwright with Chromium
+(`cd e2e && npm ci && npx playwright install chromium`):
 
 ```bash
 node e2e/ui.test.js http://localhost:8080         # real browser: upload, versions, tags, notes, QR dialog
