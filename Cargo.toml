@@ -3,6 +3,9 @@ name = "bulut"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
+license = "MIT"
+description = "A small dropbox for sessions, with short links, a REST API, llms.txt and MCP."
+repository = "https://github.com/beyto1974/bulut"
 
 [lib]
 name = "bulut"

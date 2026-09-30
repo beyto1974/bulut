@@ -1,0 +1,65 @@
+# Bulut with its own Postgres and its own Garage (S3-compatible storage), for a trial or a small setup.
+#
+#   ./setup.sh        creates .env with fresh secrets, starts everything and prepares the storage
+#
+# Bulut has NO authentication. Put a reverse proxy with basic auth (people) and a bearer token
+# (agents and REST clients) in front of it before it is reachable by anyone you do not trust.
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bulut
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./setup.sh first}
+      POSTGRES_DB: bulut
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "bulut"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  garage:
+    image: dxflrs/garage:v2.4.1
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?run ./setup.sh first}
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+
+  bulut:
+    image: ${BULUT_IMAGE:-ghcr.io/beyto1974/bulut:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_started
+    environment:
+      # production, testing or development. Anything but production is shown in the page title and header.
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # How the app is reached from outside. Short links and the QR code use it.
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      DATABASE_URL: postgresql://bulut:${POSTGRES_PASSWORD}@postgres:5432/bulut
+      S3_ENDPOINT_URL: http://garage:3900
+      S3_BUCKET: bulut
+      S3_REGION: garage
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?run ./setup.sh first}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?run ./setup.sh first}
+      MAX_FILES_PER_SESSION: ${MAX_FILES_PER_SESSION:-100}
+      SESSION_IDLE_TTL_DAYS: ${SESSION_IDLE_TTL_DAYS:-7}
+    # Only on this machine. Expose it through your reverse proxy, never directly.
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8080}:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  postgres-data:
+  garage-meta:
+  garage-data:

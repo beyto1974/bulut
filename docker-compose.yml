@@ -8,10 +8,10 @@ services:
       # Short links and the QR code use this, so it should match how the app is reached.
       BASE_URL: ${BASE_URL:-http://localhost:${HOST_PORT}}
     ports:
-      - "127.0.0.1:${HOST_PORT:?set HOST_PORT in .env, run freeport for a free port}:8080"
+      - "127.0.0.1:${HOST_PORT:?set HOST_PORT in .env to a free port}:8080"
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-# Postgres and S3 come from the shared dev services (devdb / devgarage), so no db or garage service is
-# defined for development. Start with: docker compose up -d --no-deps backend
+# Development compose file: Postgres and S3 are not part of it, point DATABASE_URL and the S3_* settings in
+# .env at existing services. For a complete stack with both, see examples/docker-compose.yml.

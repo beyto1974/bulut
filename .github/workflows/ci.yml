@@ -1,18 +1,27 @@
 name: CI
 
+# This repository is meant to be public, so everything runs on GitHub-hosted runners: a self-hosted
+# runner would execute code from pull requests on a machine of ours. Pull requests from forks get a
+# read-only token and no secrets, and nothing below uses `pull_request_target`.
 on:
   push:
     branches: ["**"]
   pull_request:
     branches: ["main"]
   # A manual entry point, for a commit that ended up with no run at all. It only runs the checks:
-  # `release`, `image` publishing and `notify` need a push to main, so a dispatch can never bump
+  # `release`, publishing in `image` and `notify` need a push to main, so a dispatch can never bump
   # the version or publish an image.
   #
   #   gh workflow run ci.yml --ref main
   workflow_dispatch:
 
-# Runs on main are never cancelled: a cancelled `release` could leave a bumped version without an image.
+# Least privilege by default. Jobs that need more (release, image) say so themselves.
+permissions:
+  contents: read
+
+# A push to a branch with an open PR is checked twice, by the push and by the PR: the newer run
+# cancels the older one. Runs on main are never cancelled, because a cancelled `release` could
+# leave a bumped version without an image.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -21,75 +30,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # A push to a branch that already has an open PR is checked twice, once by the push and once by
-  # the PR. The runner is also the development machine, so this job answers one question, "is this
-  # push already covered?", and the check jobs hang off it. A branch without a PR keeps its CI.
-  duplicate:
-    name: Already covered by a PR?
-    runs-on: [self-hosted, linux, x64, sysbox]
-    # Without `pull-requests: read`, `gh pr list` answers "Resource not accessible by integration",
-    # and a fallback that read the refusal as "no open PR" would skip nothing while looking green.
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      skip: ${{ steps.verdict.outputs.skip }}
-    steps:
-      - name: Verdict
-        id: verdict
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
-          BRANCH: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          if [ "$EVENT" != "push" ] || [ "$REF" = "refs/heads/main" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # No gh on the runner: check anyway. One run too many beats a tree pushed unchecked.
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! open=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq 'length' 2>&1); then
-            echo "gh pr list failed, skipping nothing: $open" >> "$GITHUB_STEP_SUMMARY"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # stderr was folded into the variable, so on a chatty success it holds more than a number.
-          case "$open" in
-            ''|*[!0-9]*)
-              echo "Unexpected answer from gh pr list: $open" >> "$GITHUB_STEP_SUMMARY"
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-              exit 0
-              ;;
-          esac
-          if [ "$open" -gt 0 ]; then
-            echo "The open PR on $BRANCH already checks this tree." >> "$GITHUB_STEP_SUMMARY"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
   # Format, lint and the script tests. No services, so this reports first.
   checks:
     name: Format, lint & scripts
-    runs-on: [self-hosted, linux, x64, sysbox]
-    needs: [duplicate]
-    if: needs.duplicate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Version script tests
         run: sh scripts/test-bump-version.sh
@@ -101,7 +56,7 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
 
       # Reported, not enforced: an advisory published upstream would turn main red without a line of
-      # this repository changing. The job summary carries the verdict.
+      # this repository changing. The job summary carries the verdict, and Dependabot opens the PRs.
       - name: Dependency audit
         continue-on-error: true
         run: |
@@ -115,9 +70,7 @@ jobs:
   # Unit and integration tests against a real Postgres and a real Garage.
   test:
     name: Tests
-    runs-on: [self-hosted, linux, x64, sysbox]
-    needs: [duplicate]
-    if: needs.duplicate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
     services:
       db:
         image: postgres:17-alpine
@@ -125,11 +78,9 @@ jobs:
           POSTGRES_USER: bulut
           POSTGRES_PASSWORD: bulut
           POSTGRES_DB: bulut
-        # A dynamic port, not 5432:5432. The runner is shared and the machine's own 5432 is taken by
-        # the Postgres every dev stack uses, so a fixed port would fail the service before step one.
         ports:
           - 5432/tcp
-        # The data is thrown away with the job, so it has no reason to touch a disk.
+        # The database of a CI job is thrown away with the job, so keep it in memory.
         options: >-
           --health-cmd "pg_isready -U bulut"
           --health-interval 5s
@@ -138,18 +89,18 @@ jobs:
           --tmpfs /var/lib/postgresql/data:rw,size=1g
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Start object storage
         uses: ./.github/actions/start-garage
         with:
-          name: bulut-garage-test-${{ github.run_id }}-${{ github.run_attempt }}
+          name: bulut-garage-test
 
       # The `job` context is not available in a job-level `env:`, so the database URL is set here.
       - name: Test
@@ -162,18 +113,12 @@ jobs:
           S3_REGION: garage
         run: cargo test --locked
 
-      - name: Stop object storage
-        if: always()
-        run: docker rm -f bulut-garage-test-${{ github.run_id }}-${{ github.run_attempt }} || true
-
   # The real app in a real browser, with large and parallel uploads, against the same services.
   # Its own job: it takes minutes where the tests take seconds, and a failure here should not hide
   # a failure there.
   e2e:
     name: End-to-end
-    runs-on: [self-hosted, linux, x64, sysbox]
-    needs: [duplicate]
-    if: needs.duplicate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
     services:
       db:
         image: postgres:17-alpine
@@ -190,30 +135,30 @@ jobs:
           --health-retries 10
           --tmpfs /var/lib/postgresql/data:rw,size=1g
     env:
-      # 200 MB instead of 1 GB: the same code path (chunks, resume) without hogging the shared runner.
+      # 200 MB instead of 1 GB: the same code path (chunks, resume) in less time.
       BULUT_E2E_BIG: "200000000"
       SHOTS_DIR: ${{ github.workspace }}/e2e-shots
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
 
-      # Keyed on the Playwright version, so a browser download only happens when it is bumped.
       - name: Install Playwright
         run: npm install --no-save --no-audit --no-fund playwright@1.62.1
 
+      # Keyed on the Playwright version, so a browser download only happens when it is bumped.
       - name: Cache the browsers
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-1.62.1
@@ -225,7 +170,7 @@ jobs:
       - name: Start object storage
         uses: ./.github/actions/start-garage
         with:
-          name: bulut-garage-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          name: bulut-garage-e2e
 
       - name: Build the app
         run: cargo build --locked
@@ -266,13 +211,12 @@ jobs:
       - name: Parallel uploads
         run: python3 e2e/parallel_upload.py "http://localhost:${{ steps.app.outputs.port }}"
 
-      - name: Stop object storage
-        if: always()
-        run: docker rm -f bulut-garage-e2e-${{ github.run_id }}-${{ github.run_attempt }} || true
+      - name: File limit
+        run: python3 e2e/file_limit.py "http://localhost:${{ steps.app.outputs.port }}"
 
       - name: Keep the logs and screenshots of a failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e2e-report
           path: |
@@ -282,9 +226,10 @@ jobs:
 
   # Main only: bump the patch version, commit and tag it, and hand the new commit to `image`.
   # The VERSION file is the single source: the binary embeds it, the UI footer and /api/version show it.
+  # This pushes to main with the workflow token, so a branch protection rule on main has to allow it.
   release:
     name: Bump version
-    runs-on: [self-hosted, linux, x64, sysbox]
+    runs-on: ubuntu-latest
     needs: [checks, test, e2e]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
@@ -295,7 +240,7 @@ jobs:
     steps:
       # The tip of main, not the pushed commit: a newer push may already have bumped the version.
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
 
@@ -303,30 +248,29 @@ jobs:
         id: bump
         run: echo "version=$(sh scripts/bump-version.sh VERSION)" >> "$GITHUB_OUTPUT"
 
-      # `[skip ci]`: without it this commit would start another run that bumps again.
+      # `[skip ci]`: pushes made with the workflow token do not start runs anyway, this keeps it
+      # that way if the token is ever replaced.
       - name: Commit and tag
         id: commit
-        uses: stefanzweifel/git-auto-commit-action@v7
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7
         with:
           commit_message: "chore(release): v${{ steps.bump.outputs.version }} [skip ci]"
           file_pattern: VERSION
           tagging_message: v${{ steps.bump.outputs.version }}
 
-  # The production image is BUILT on every run and PUSHED only from main.
-  #
-  # Built everywhere because the Dockerfile is code too: a build that only happens at publication
-  # time is a build that breaks on the day it matters. Pushed only from main, and only when a
-  # registry is configured, so a fork or a machine without REGISTRY_URL still gets the build
-  # without needing credentials.
+  # The production image is BUILT on every run and PUSHED to the GitHub container registry only from
+  # main, after the version bump. Built everywhere because the Dockerfile is code too: a build that
+  # only happens at publication time is a build that breaks on the day it matters.
   image:
     name: Build and push the image
-    runs-on: [self-hosted, linux, x64, sysbox]
+    runs-on: ubuntu-latest
     needs: [checks, test, e2e, release]
     # `release` is skipped off main, and a job whose needs were skipped is skipped with them, so
     # the condition says out loud that skipped is fine here.
     if: ${{ !cancelled() && needs.checks.result == 'success' && needs.test.result == 'success' && needs.e2e.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     permissions:
       contents: read
+      packages: write
     outputs:
       published: ${{ steps.registry.outputs.publish }}
       version: ${{ steps.vars.outputs.version }}
@@ -334,38 +278,34 @@ jobs:
     steps:
       # On main the image is built from the bumped commit, so the version inside matches its tag.
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.release.outputs.sha || github.sha }}
 
-      # A job-level `if:` cannot read secrets, so whether this run can publish is decided here.
       - name: Can this run publish?
         id: registry
         env:
-          REGISTRY_URL: ${{ vars.REGISTRY_URL }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           RELEASED: ${{ needs.release.result }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ] \
-             && [ "${{ github.ref }}" = "refs/heads/main" ] \
-             && [ "$RELEASED" = "success" ] \
-             && [ -n "$REGISTRY_URL" ] && [ -n "$REGISTRY_USERNAME" ]; then
+          if [ "$EVENT" = "push" ] && [ "$REF" = "refs/heads/main" ] && [ "$RELEASED" = "success" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "Image built, not published (not main, or no registry configured)." >> "$GITHUB_STEP_SUMMARY"
+            echo "Image built, not published (only pushes to main publish)." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Log in to the registry
+      - name: Log in to the GitHub container registry
         if: steps.registry.outputs.publish == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
-          registry: ${{ vars.REGISTRY_URL }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Name and version
         id: vars
@@ -379,7 +319,7 @@ jobs:
       # Built once and loaded, before the build that publishes: the layers come from the cache, and
       # an image that is too big or carries a setting is not pushed.
       - name: Build for review
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           push: false
@@ -396,6 +336,10 @@ jobs:
             echo "The image is larger than 50 MB." >&2
             exit 1
           fi
+          user=$(docker image inspect bulut:ci --format '{{.Config.User}}')
+          case "$user" in
+            ''|0|0:*|root|root:*) echo "The image runs as root." >&2; exit 1 ;;
+          esac
           if docker history --no-trunc bulut:ci | grep -Ei 'password|secret|\.env|DATABASE_URL=|S3_SECRET'; then
             echo "The image history mentions a setting or secret." >&2
             exit 1
@@ -405,34 +349,32 @@ jobs:
       # short sha is what a running container can be traced back to, and the version is what the
       # release notes call it.
       - name: Build, and push from main
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           push: ${{ steps.registry.outputs.publish == 'true' }}
           cache-from: type=gha,scope=bulut
           tags: |
-            ${{ vars.REGISTRY_URL || 'local' }}/${{ steps.vars.outputs.repo_lc }}:latest
-            ${{ vars.REGISTRY_URL || 'local' }}/${{ steps.vars.outputs.repo_lc }}:${{ steps.vars.outputs.sha_short }}
-            ${{ vars.REGISTRY_URL || 'local' }}/${{ steps.vars.outputs.repo_lc }}:v${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.repo_lc }}:latest
+            ghcr.io/${{ steps.vars.outputs.repo_lc }}:${{ steps.vars.outputs.sha_short }}
+            ghcr.io/${{ steps.vars.outputs.repo_lc }}:v${{ steps.vars.outputs.version }}
 
       - name: Say what was published
         if: steps.registry.outputs.publish == 'true'
         run: |
           {
-            echo "Published \`${{ steps.vars.outputs.repo_lc }}:v${{ steps.vars.outputs.version }}\`"
+            echo "Published \`ghcr.io/${{ steps.vars.outputs.repo_lc }}:v${{ steps.vars.outputs.version }}\`"
             echo "(and \`latest\`, \`${{ steps.vars.outputs.sha_short }}\`)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Tells the server there is something new to pull. Only after an image was actually published:
-  # a webhook fired on a run that built nothing would redeploy the previous image and look like a
-  # deployment.
+  # Tells a server there is something new to pull. Optional: it only runs when the secret exists,
+  # and only after an image was actually published, because a webhook fired on a run that built
+  # nothing would redeploy the previous image and look like a deployment.
   notify:
     name: Tell the server
-    runs-on: [self-hosted, linux, x64, sysbox]
+    runs-on: ubuntu-latest
     needs: [image]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.image.outputs.published == 'true'
-    permissions:
-      contents: read
     steps:
       - name: Call the deploy hook
         env:

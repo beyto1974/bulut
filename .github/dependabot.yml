@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Rust crates. The lockfile is committed, so these PRs are what moves it.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      aws-sdk:
+        patterns: ["aws-*"]
+      patch-and-minor:
+        update-types: ["patch", "minor"]
+
+  # The pinned action commits in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # The base image digests in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
