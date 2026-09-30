@@ -10,6 +10,7 @@ use crate::ports::code_generator::CodeGenerator;
 use crate::ports::node_repo::NodeRepo;
 use crate::ports::session_repo::{RepoError, SessionRepo};
 use crate::services::error::ServiceError;
+use crate::services::upload_service::UploadService;
 
 /// One activity write per session per minute is plenty for a 7 day window.
 const TOUCH_THROTTLE_SECS: i64 = 60;
@@ -19,6 +20,7 @@ pub struct SessionService {
     pub sessions: Arc<dyn SessionRepo>,
     pub nodes: Arc<dyn NodeRepo>,
     pub blobs: Arc<dyn BlobStore>,
+    pub uploads: Arc<UploadService>,
     pub codes: Arc<dyn CodeGenerator>,
     pub clock: Arc<dyn Clock>,
     pub code_length: usize,
@@ -88,6 +90,8 @@ impl SessionService {
 
     /// Removes the session, its rows and its stored objects.
     pub async fn purge(&self, code: &str) -> Result<(), ServiceError> {
+        // Unfinished multipart uploads hold space in the store until they are aborted.
+        self.uploads.discard_session(code).await?;
         let keys = self.nodes.all_keys(code).await?;
         self.blobs.delete_many(&keys).await?;
         self.sessions.delete(code).await?;

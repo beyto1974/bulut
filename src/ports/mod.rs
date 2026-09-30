@@ -3,3 +3,4 @@ pub mod clock;
 pub mod code_generator;
 pub mod node_repo;
 pub mod session_repo;
+pub mod upload_repo;

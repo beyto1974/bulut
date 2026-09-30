@@ -14,7 +14,7 @@ use super::{router, AppState};
 use crate::config::Config;
 use crate::services::tests::{fixture, Fixture};
 
-async fn app() -> (Router, Fixture) {
+pub(super) async fn app() -> (Router, Fixture) {
     let f = fixture().await;
     let config = Config::from_map(&HashMap::new()).unwrap();
     let state = AppState {
@@ -22,6 +22,7 @@ async fn app() -> (Router, Fixture) {
         version: "9.9.9",
         sessions: f.sessions.clone(),
         tree: f.tree.clone(),
+        uploads: f.uploads.clone(),
     };
     (router(state), f)
 }

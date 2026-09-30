@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use crate::adapters::memory_blobs::MemoryBlobStore;
 use crate::adapters::postgres::{connect, PgSessionRepo};
 use crate::adapters::postgres_nodes::PgNodeRepo;
+use crate::adapters::postgres_uploads::PgUploadRepo;
 use crate::ports::blob_store::BlobStore;
 use crate::ports::clock::{Clock, ManualClock};
 use crate::ports::code_generator::RandomCodeGenerator;
@@ -16,6 +17,7 @@ use crate::ports::node_repo::{NewVersion, NodeRepo};
 use crate::services::error::ServiceError;
 use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
+use crate::services::upload_service::UploadService;
 
 // The sweeper works on the whole database, so tests that move the clock must not overlap.
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -24,6 +26,7 @@ pub struct Fixture {
     _guard: tokio::sync::MutexGuard<'static, ()>,
     pub sessions: Arc<SessionService>,
     pub tree: Arc<TreeService>,
+    pub uploads: Arc<UploadService>,
     pub nodes: Arc<PgNodeRepo>,
     pub blobs: Arc<MemoryBlobStore>,
     pub clock: Arc<ManualClock>,
@@ -38,10 +41,20 @@ pub async fn fixture() -> Fixture {
     let nodes = Arc::new(PgNodeRepo::new(pool.clone()));
     // Start far in the past so a sweep here never reaches sessions other tests made with the real clock.
     let clock = Arc::new(ManualClock::new(Utc::now() - Duration::days(120)));
+    let uploads = Arc::new(UploadService {
+        uploads: Arc::new(PgUploadRepo::new(pool.clone())),
+        nodes: nodes.clone(),
+        blobs: blobs.clone(),
+        clock: clock.clone(),
+        // Small parts keep tests fast; the memory store has no 5 MiB minimum.
+        part_size: 10,
+        max_file_bytes: 1000,
+    });
     let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),
         nodes: nodes.clone(),
         blobs: blobs.clone(),
+        uploads: uploads.clone(),
         codes: Arc::new(RandomCodeGenerator::new(5)),
         clock: clock.clone(),
         code_length: 5,
@@ -56,6 +69,7 @@ pub async fn fixture() -> Fixture {
         _guard: guard,
         sessions,
         tree,
+        uploads,
         nodes,
         blobs,
         clock,

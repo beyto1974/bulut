@@ -58,6 +58,7 @@ pub struct Config {
     pub base_url: String,
     pub code_length: usize,
     pub chunk_size: usize,
+    pub max_file_bytes: u64,
     pub session_idle_ttl_days: u32,
     pub sweep_interval_secs: u64,
 }
@@ -97,6 +98,10 @@ impl Config {
             // S3 multipart parts (except the last) must be at least 5 MiB.
             return Err(ConfigError::Invalid("CHUNK_SIZE", chunk_size.to_string()));
         }
+        let max_file_bytes: u64 = num("MAX_FILE_BYTES", get("MAX_FILE_BYTES"), 1024 * 1024 * 1024)?;
+        if max_file_bytes == 0 {
+            return Err(ConfigError::Invalid("MAX_FILE_BYTES", "0".into()));
+        }
         let session_idle_ttl_days: u32 =
             num("SESSION_IDLE_TTL_DAYS", get("SESSION_IDLE_TTL_DAYS"), 7)?;
         if session_idle_ttl_days == 0 {
@@ -111,6 +116,7 @@ impl Config {
                 .unwrap_or_else(|| format!("http://localhost:{port}")),
             code_length,
             chunk_size,
+            max_file_bytes,
             session_idle_ttl_days,
             sweep_interval_secs: num("SWEEP_INTERVAL_SECS", get("SWEEP_INTERVAL_SECS"), 3600)?,
         })
@@ -136,6 +142,7 @@ mod tests {
         assert_eq!(c.port, 8080);
         assert_eq!(c.code_length, 5);
         assert_eq!(c.session_idle_ttl_days, 7);
+        assert_eq!(c.max_file_bytes, 1024 * 1024 * 1024);
         assert_eq!(c.base_url, "http://localhost:8080");
     }
 
@@ -164,5 +171,6 @@ mod tests {
         assert!(Config::from_map(&vars(&[("CODE_LENGTH", "1")])).is_err());
         assert!(Config::from_map(&vars(&[("CHUNK_SIZE", "1024")])).is_err());
         assert!(Config::from_map(&vars(&[("SESSION_IDLE_TTL_DAYS", "0")])).is_err());
+        assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "0")])).is_err());
     }
 }

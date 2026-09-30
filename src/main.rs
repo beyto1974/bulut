@@ -53,7 +53,7 @@ async fn main() {
     let env = config.app_env.as_str();
     let idle_days = config.session_idle_ttl_days;
     let state = app::build_state(config, pool, blobs, VERSION);
-    app::spawn_sweeper(state.sessions.clone(), sweep_every);
+    app::spawn_sweeper(state.sessions.clone(), state.uploads.clone(), sweep_every);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await

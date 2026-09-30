@@ -3,7 +3,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::node::{validate_name, validate_tag, FileVersion, Node, NodeEntry};
-use crate::ports::blob_store::BlobStore;
+use crate::ports::blob_store::{BlobRead, BlobStore};
 use crate::ports::clock::Clock;
 use crate::ports::node_repo::{NodePatch, NodeRepo};
 use crate::services::error::ServiceError;
@@ -110,6 +110,42 @@ impl TreeService {
             .await?
             .ok_or(ServiceError::NotFound)?;
         Ok(self.nodes.versions(session, node).await?)
+    }
+
+    /// Looks up one version by id, without opening its bytes.
+    pub async fn resolve_version(
+        &self,
+        session: &str,
+        version: Uuid,
+    ) -> Result<(Node, FileVersion), ServiceError> {
+        self.nodes
+            .version(session, version)
+            .await?
+            .ok_or(ServiceError::NotFound)
+    }
+
+    /// Finds a file by name (and optionally tag). Without a tag, or with `latest`, this is the
+    /// newest version.
+    pub async fn resolve_named(
+        &self,
+        session: &str,
+        parent: Option<Uuid>,
+        name: &str,
+        tag: Option<&str>,
+    ) -> Result<(Node, FileVersion), ServiceError> {
+        self.nodes
+            .find_version(session, parent, name, tag)
+            .await?
+            .ok_or(ServiceError::NotFound)
+    }
+
+    /// Opens the bytes of a version. `range` is an inclusive `(start, end)`.
+    pub async fn open(
+        &self,
+        version: &FileVersion,
+        range: Option<(u64, u64)>,
+    ) -> Result<BlobRead, ServiceError> {
+        Ok(self.blobs.read(&version.blob_key, range).await?)
     }
 
     pub async fn add_tag(

@@ -9,6 +9,7 @@ People use the web UI, LLM agents use REST, `llms.txt`, `openapi.json` or the MC
 - Uploading a file with an existing name adds a new version. Versions can be tagged (`v1.4.2`, `latest`).
   Both the created time and the uploaded time are kept.
 - Every session has a QR code of its link.
+- Thumbnails are not generated yet, the UI shows a file icon.
 - A session is deleted after `SESSION_IDLE_TTL_DAYS` (default 7) days without any activity: views, downloads,
   uploads and API reads all count as activity.
 

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -9,8 +10,10 @@ use serde_json::{json, Value};
 use crate::config::Config;
 use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
+use crate::services::upload_service::UploadService;
 
 pub mod error;
+pub mod files;
 pub mod sessions;
 pub mod tree;
 
@@ -20,9 +23,12 @@ pub struct AppState {
     pub version: &'static str,
     pub sessions: Arc<SessionService>,
     pub tree: Arc<TreeService>,
+    pub uploads: Arc<UploadService>,
 }
 
 pub fn router(state: AppState) -> Router {
+    // A part is at most one chunk; allow a little slack for clients that add framing.
+    let part_limit = state.config.chunk_size + 1024;
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/version", get(version))
@@ -44,6 +50,29 @@ pub fn router(state: AppState) -> Router {
             "/api/s/{code}/versions/{version}/tags/{tag}",
             put(tree::add_tag).delete(tree::remove_tag),
         )
+        .route("/api/s/{code}/uploads", post(files::init_upload))
+        .route(
+            "/api/s/{code}/uploads/{id}",
+            get(files::upload_status).delete(files::abort_upload),
+        )
+        .route(
+            "/api/s/{code}/uploads/{id}/parts/{number}",
+            put(files::put_part).layer(DefaultBodyLimit::max(part_limit)),
+        )
+        .route(
+            "/api/s/{code}/uploads/{id}/complete",
+            post(files::complete_upload),
+        )
+        // The body is streamed and its size is checked by the service (MAX_FILE_BYTES).
+        .route(
+            "/api/s/{code}/upload",
+            put(files::simple_upload).layer(DefaultBodyLimit::disable()),
+        )
+        .route("/api/s/{code}/download", get(files::download_named))
+        .route(
+            "/api/s/{code}/versions/{version}/download",
+            get(files::download_version),
+        )
         .with_state(state)
 }
 
@@ -58,5 +87,7 @@ async fn version(axum::extract::State(state): axum::extract::State<AppState>) ->
     }))
 }
 
+#[cfg(test)]
+mod file_tests;
 #[cfg(test)]
 mod tests;
