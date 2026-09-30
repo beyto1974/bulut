@@ -162,8 +162,8 @@ pub fn general_index(
     format!(
         "# Bulut
 
-> A small dropbox for sessions. A session has a short code, a description and any number of files and folders.
-> Files and folders can carry a note. Uploading a file with an existing name adds a new version, and a version can be tagged.
+> A small dropbox for sessions. A session has a short code, a description and any number of files.
+> Files can carry a note. Uploading a file with an existing name adds a new version, and a version can be tagged.
 
 ## Basics
 
@@ -179,6 +179,7 @@ pub fn general_index(
 - Upload one file: PUT {base_url}/api/s/<code>/upload?name=build.apk&tag=v1.4.2 with the file as the body
 - Download the newest version: GET {base_url}/api/s/<code>/download?name=build.apk
 - Download a tagged version: GET {base_url}/api/s/<code>/download?name=build.apk&tag=v1.4.1
+- List files as JSON, with ids: GET {base_url}/api/s/<code>/files
 - Set a note: PATCH {base_url}/api/s/<code>/nodes/<id> with JSON {{\"note\": \"...\"}}
 - Chunked upload: POST /api/s/<code>/uploads, PUT each part, GET the upload to see which parts exist, then POST .../complete
 

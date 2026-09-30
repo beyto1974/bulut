@@ -1,0 +1,275 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Bulut",
+    "version": "{{VERSION}}",
+    "description": "A small dropbox for sessions. A session has a short code, a description and files. Uploading a file with an existing name adds a new version, and versions can be tagged. The deployment is protected in front of the app, send the credentials it gave you with every request."
+  },
+  "servers": [{ "url": "{{BASE_URL}}" }],
+  "paths": {
+    "/api/s": {
+      "post": {
+        "summary": "Create a session",
+        "operationId": "createSession",
+        "requestBody": {
+          "required": false,
+          "content": { "application/json": { "schema": { "type": "object", "properties": { "description": { "type": "string", "maxLength": 2000 } } } } }
+        },
+        "responses": { "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } } }
+      }
+    },
+    "/api/s/{code}": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "get": {
+        "summary": "Get a session",
+        "operationId": "getSession",
+        "responses": { "200": { "description": "The session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "patch": {
+        "summary": "Change the description",
+        "operationId": "setDescription",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["description"], "properties": { "description": { "type": "string", "maxLength": 2000 } } } } } },
+        "responses": { "200": { "description": "The session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "delete": {
+        "summary": "Delete the session and all its files",
+        "operationId": "deleteSession",
+        "responses": { "204": { "description": "Deleted" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/files": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "get": {
+        "summary": "List files with their newest version",
+        "operationId": "listFiles",
+        "responses": { "200": { "description": "The files", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Listing" } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/nodes/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/id" }],
+      "patch": {
+        "summary": "Rename a file or change its note",
+        "operationId": "updateFile",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "note": { "type": "string", "maxLength": 4000 } } } } } },
+        "responses": { "200": { "description": "The file", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Node" } } } }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" } }
+      },
+      "delete": {
+        "summary": "Delete a file with all its versions",
+        "operationId": "deleteFile",
+        "responses": { "204": { "description": "Deleted" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/nodes/{id}/versions": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/id" }],
+      "get": {
+        "summary": "List the versions of a file, newest first",
+        "operationId": "listVersions",
+        "responses": { "200": { "description": "The versions", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/FileVersion" } } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/versions/{version}/tags/{tag}": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/version" }, { "name": "tag", "in": "path", "required": true, "schema": { "type": "string", "maxLength": 64 }, "description": "No spaces, commas or slashes. The tag latest is set automatically." }],
+      "put": {
+        "summary": "Put a tag on a version. If another version of the file has it, the tag moves.",
+        "operationId": "addTag",
+        "responses": { "200": { "description": "The version", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FileVersion" } } } }, "400": { "$ref": "#/components/responses/Invalid" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "delete": {
+        "summary": "Remove a tag",
+        "operationId": "removeTag",
+        "responses": { "204": { "description": "Removed" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/upload": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "put": {
+        "summary": "Upload a file with one request. The body is the file.",
+        "description": "Use this for files that fit in one request. For very large files or unreliable connections use the chunked upload. A file with an existing name becomes a new version.",
+        "operationId": "uploadFile",
+        "parameters": [
+          { "name": "name", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Comma separated tags for the new version." },
+          { "name": "created_at", "in": "query", "required": false, "schema": { "type": "string", "format": "date-time" }, "description": "The file's own timestamp on the sender's machine." }
+        ],
+        "requestBody": { "required": true, "content": { "*/*": { "schema": { "type": "string", "format": "binary" } } } },
+        "responses": { "201": { "description": "Stored", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stored" } } } }, "400": { "$ref": "#/components/responses/Invalid" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/uploads": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "post": {
+        "summary": "Start a chunked upload",
+        "operationId": "startUpload",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "size"], "properties": { "name": { "type": "string" }, "size": { "type": "integer", "format": "int64" }, "content_type": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } } } } } },
+        "responses": { "201": { "description": "Send the parts next", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UploadStatus" } } } }, "400": { "$ref": "#/components/responses/Invalid" } }
+      }
+    },
+    "/api/s/{code}/uploads/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/id" }],
+      "get": {
+        "summary": "Which parts are stored, to resume an upload",
+        "operationId": "uploadStatus",
+        "responses": { "200": { "description": "Status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UploadStatus" } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
+      },
+      "delete": {
+        "summary": "Abandon an upload",
+        "operationId": "abortUpload",
+        "responses": { "204": { "description": "Aborted" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/uploads/{id}/parts/{number}": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/id" }, { "name": "number", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } }],
+      "put": {
+        "summary": "Send one part. Every part is part_size bytes, the last one is the remainder.",
+        "operationId": "uploadPart",
+        "requestBody": { "required": true, "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+        "responses": { "204": { "description": "Stored. Sending the same part again replaces it." }, "400": { "$ref": "#/components/responses/Invalid" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/uploads/{id}/complete": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/id" }],
+      "post": {
+        "summary": "Finish the upload once every part is stored",
+        "operationId": "completeUpload",
+        "responses": { "201": { "description": "Stored", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stored" } } } }, "409": { "$ref": "#/components/responses/Conflict" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/api/s/{code}/download": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "get": {
+        "summary": "Download a file by name. Without a tag this is the newest version.",
+        "operationId": "downloadByName",
+        "parameters": [
+          { "name": "name", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "tag", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "Range", "in": "header", "required": false, "schema": { "type": "string" }, "description": "A single byte range such as bytes=0-1023." }
+        ],
+        "responses": { "200": { "description": "The file" }, "206": { "description": "Part of the file" }, "404": { "$ref": "#/components/responses/NotFound" }, "416": { "description": "Range not satisfiable" } }
+      }
+    },
+    "/api/s/{code}/versions/{version}/download": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/version" }],
+      "get": {
+        "summary": "Download one version by id",
+        "operationId": "downloadVersion",
+        "responses": { "200": { "description": "The file" }, "206": { "description": "Part of the file" }, "404": { "$ref": "#/components/responses/NotFound" }, "416": { "description": "Range not satisfiable" } }
+      }
+    },
+    "/{code}/llms.txt": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "get": {
+        "summary": "The session as plain text for language models",
+        "operationId": "sessionIndex",
+        "responses": { "200": { "description": "Text", "content": { "text/plain": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/llms.txt": {
+      "get": {
+        "summary": "A short guide to the service for language models",
+        "operationId": "guide",
+        "responses": { "200": { "description": "Text", "content": { "text/plain": { "schema": { "type": "string" } } } } }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "Model Context Protocol endpoint (JSON-RPC over POST)",
+        "operationId": "mcp",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "JSON-RPC response" }, "202": { "description": "Notification accepted" } }
+      }
+    },
+    "/api/version": {
+      "get": {
+        "summary": "Running version and environment",
+        "operationId": "version",
+        "responses": { "200": { "description": "Version", "content": { "application/json": { "schema": { "type": "object", "properties": { "version": { "type": "string" }, "env": { "type": "string" } } } } } } }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Liveness check",
+        "operationId": "health",
+        "responses": { "200": { "description": "Alive" } }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "code": { "name": "code", "in": "path", "required": true, "schema": { "type": "string", "example": "k7m3q" }, "description": "Session code: lowercase letters and digits without look-alikes." },
+      "id": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "version": { "name": "version", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+    },
+    "responses": {
+      "NotFound": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Invalid": { "description": "Invalid input", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Conflict": { "description": "Conflict", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    },
+    "schemas": {
+      "Error": { "type": "object", "properties": { "error": { "type": "string" } } },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string" },
+          "url": { "type": "string" },
+          "description": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "last_activity_at": { "type": "string", "format": "date-time" },
+          "expires_at": { "type": "string", "format": "date-time", "description": "When the session is deleted if nothing touches it." },
+          "idle_ttl_days": { "type": "integer" }
+        }
+      },
+      "Node": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "kind": { "type": "string", "enum": ["file"] },
+          "note": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "FileVersion": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "node_id": { "type": "string", "format": "uuid" },
+          "version": { "type": "integer" },
+          "size": { "type": "integer", "format": "int64" },
+          "content_type": { "type": "string" },
+          "client_created_at": { "type": "string", "format": "date-time", "nullable": true, "description": "The file's own timestamp on the sender's machine." },
+          "uploaded_at": { "type": "string", "format": "date-time" },
+          "is_latest": { "type": "boolean" },
+          "tags": { "type": "array", "items": { "type": "string" }, "description": "The newest version also carries latest." }
+        }
+      },
+      "NodeEntry": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Node" },
+          { "type": "object", "properties": { "latest": { "$ref": "#/components/schemas/FileVersion" }, "version_count": { "type": "integer" } } }
+        ]
+      },
+      "Listing": {
+        "type": "object",
+        "properties": {
+          "session": { "type": "string" },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/NodeEntry" } }
+        }
+      },
+      "Stored": {
+        "type": "object",
+        "properties": { "node": { "$ref": "#/components/schemas/Node" }, "version": { "$ref": "#/components/schemas/FileVersion" } }
+      },
+      "UploadStatus": {
+        "type": "object",
+        "properties": {
+          "upload_id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "size": { "type": "integer", "format": "int64" },
+          "part_size": { "type": "integer" },
+          "parts_total": { "type": "integer" },
+          "parts_received": { "type": "array", "items": { "type": "integer" }, "description": "Part numbers already stored. Send the rest." }
+        }
+      }
+    }
+  }
+}

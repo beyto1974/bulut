@@ -12,8 +12,10 @@ use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
 use crate::services::upload_service::UploadService;
 
+pub mod agent;
 pub mod error;
 pub mod files;
+pub mod mcp;
 pub mod sessions;
 pub mod tree;
 
@@ -32,6 +34,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/version", get(version))
+        .route("/llms.txt", get(agent::general_llms))
+        .route("/openapi.json", get(agent::openapi))
+        .route("/mcp", post(agent::mcp_post))
+        .route("/{code}/llms.txt", get(agent::session_llms))
         .route("/api/s", post(sessions::create))
         .route(
             "/api/s/{code}",
@@ -87,6 +93,8 @@ async fn version(axum::extract::State(state): axum::extract::State<AppState>) ->
     }))
 }
 
+#[cfg(test)]
+mod agent_tests;
 #[cfg(test)]
 mod file_tests;
 #[cfg(test)]

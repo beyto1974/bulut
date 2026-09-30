@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 use super::tests::app;
 
-async fn raw(
+pub(super) async fn raw(
     app: &Router,
     method: Method,
     path: &str,
@@ -34,11 +34,11 @@ async fn raw(
     )
 }
 
-fn json_of(b: &Bytes) -> Value {
+pub(super) fn json_of(b: &Bytes) -> Value {
     serde_json::from_slice(b).unwrap_or(Value::Null)
 }
 
-async fn new_session(app: &Router) -> String {
+pub(super) async fn new_session(app: &Router) -> String {
     let (_, _, b) = raw(app, Method::POST, "/api/s", &[], b"").await;
     json_of(&b)["code"].as_str().unwrap().to_string()
 }
