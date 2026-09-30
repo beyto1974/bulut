@@ -2,3 +2,4 @@ target/
 .env
 docker-compose.override.yml
 *.log
+node_modules/

@@ -16,8 +16,9 @@ pub struct S3BlobStore {
     bucket: String,
 }
 
-fn storage<E: std::fmt::Display>(e: E) -> BlobError {
-    BlobError::Storage(e.to_string())
+/// The SDK's own `Display` is just "service error"; the context shows the code and message.
+fn storage<E: std::error::Error>(e: E) -> BlobError {
+    BlobError::Storage(aws_sdk_s3::error::DisplayErrorContext(&e).to_string())
 }
 
 impl S3BlobStore {
@@ -58,14 +59,24 @@ impl S3BlobStore {
     pub async fn ensure_bucket(&self) -> Result<(), BlobError> {
         match self.client.head_bucket().bucket(&self.bucket).send().await {
             Ok(_) => Ok(()),
-            Err(e) if e.as_service_error().is_some_and(|s| s.is_not_found()) => self
+            Err(e) if e.as_service_error().is_some_and(|s| s.is_not_found()) => match self
                 .client
                 .create_bucket()
                 .bucket(&self.bucket)
                 .send()
                 .await
-                .map(|_| ())
-                .map_err(storage),
+            {
+                Ok(_) => Ok(()),
+                // Someone else created it between our check and our create, for example a second
+                // instance starting at the same moment. That is the outcome we wanted.
+                Err(e)
+                    if e.as_service_error()
+                        .is_some_and(|s| s.is_bucket_already_owned_by_you()) =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(storage(e)),
+            },
             Err(e) => Err(storage(e)),
         }
     }

@@ -5,9 +5,9 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["main"]
-  # Manual entry point, for a commit that ended up with no run at all. It only runs the checks:
-  # `release`, `publish` and `image-update-webhook` require a push to main, so a dispatch can
-  # never bump the version or publish an image.
+  # A manual entry point, for a commit that ended up with no run at all. It only runs the checks:
+  # `release`, `image` publishing and `notify` need a push to main, so a dispatch can never bump
+  # the version or publish an image.
   #
   #   gh workflow run ci.yml --ref main
   workflow_dispatch:
@@ -17,13 +17,18 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  # A push to a branch that already has an open PR is checked twice, by the push and by the PR.
-  # The runner is also the development machine, so this job answers one question, "is this push
-  # already covered by a PR?", and the check jobs wait on it. A branch without a PR keeps its CI.
+  # A push to a branch that already has an open PR is checked twice, once by the push and once by
+  # the PR. The runner is also the development machine, so this job answers one question, "is this
+  # push already covered?", and the check jobs hang off it. A branch without a PR keeps its CI.
   duplicate:
-    name: Push already covered by a PR?
+    name: Already covered by a PR?
     runs-on: [self-hosted, linux, x64, sysbox]
+    # Without `pull-requests: read`, `gh pr list` answers "Resource not accessible by integration",
+    # and a fallback that read the refusal as "no open PR" would skip nothing while looking green.
     permissions:
       contents: read
       pull-requests: read
@@ -43,19 +48,20 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Without gh, or when it fails, check anyway: an extra run is better than an unchecked push.
+          # No gh on the runner: check anyway. One run too many beats a tree pushed unchecked.
           if ! command -v gh >/dev/null 2>&1; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! open=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq 'length' 2>&1); then
-            echo "gh pr list failed, running the checks anyway: $open" >> "$GITHUB_STEP_SUMMARY"
+            echo "gh pr list failed, skipping nothing: $open" >> "$GITHUB_STEP_SUMMARY"
             echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # stderr was folded into the variable, so on a chatty success it holds more than a number.
           case "$open" in
             ''|*[!0-9]*)
-              echo "Unexpected answer from gh pr list, running the checks anyway: $open" >> "$GITHUB_STEP_SUMMARY"
+              echo "Unexpected answer from gh pr list: $open" >> "$GITHUB_STEP_SUMMARY"
               echo "skip=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
@@ -67,48 +73,23 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-  test:
-    name: Format, lint and tests
+  # Format, lint and the script tests. No services, so this reports first.
+  checks:
+    name: Format, lint & scripts
     runs-on: [self-hosted, linux, x64, sysbox]
     needs: [duplicate]
     if: needs.duplicate.outputs.skip != 'true'
-    # A container job: Postgres and the S3 mock are reached by service name on their own ports, so nothing
-    # is published on the shared runner's host and nothing can collide with a development stack.
-    container: rust:1-bookworm
-    services:
-      db:
-        image: postgres:17
-        env:
-          POSTGRES_USER: bulut
-          POSTGRES_PASSWORD: bulut
-          POSTGRES_DB: bulut
-        # The database of a CI job is thrown away with the job, so keep it in memory.
-        options: >-
-          --health-cmd "pg_isready -U bulut"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-          --tmpfs /var/lib/postgresql/data:rw,size=1g
-      s3:
-        image: adobe/s3mock:latest
-        env:
-          initialBuckets: bulut-ci
-    env:
-      DATABASE_URL: postgresql://bulut:bulut@db:5432/bulut
-      S3_ENDPOINT_URL: http://s3:9090
-      S3_BUCKET: bulut-ci
-      S3_ACCESS_KEY_ID: ci
-      S3_SECRET_ACCESS_KEY: ci-secret
-      S3_REGION: us-east-1
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-
-      - name: Install rustfmt and clippy
-        run: rustup component add rustfmt clippy
 
       - name: Version script tests
         run: sh scripts/test-bump-version.sh
@@ -119,63 +100,192 @@ jobs:
       - name: Lint
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      # The S3 mock needs a few seconds after its container reports started.
-      - name: Wait for the S3 mock
+      # Reported, not enforced: an advisory published upstream would turn main red without a line of
+      # this repository changing. The job summary carries the verdict.
+      - name: Dependency audit
+        continue-on-error: true
         run: |
-          for i in $(seq 1 60); do
-            if curl -s -o /dev/null http://s3:9090/; then exit 0; fi
-            sleep 1
-          done
-          echo "the S3 mock did not come up" >&2
-          exit 1
+          cargo install cargo-audit --locked --quiet || exit 0
+          if cargo audit > audit.txt 2>&1; then
+            echo "## Audit: clean" >> "$GITHUB_STEP_SUMMARY"
+          else
+            { echo "## Audit: advisories found"; echo; echo '```'; cat audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Test
-        run: cargo test --locked
-
-  # Builds the image on every check run, without publishing, so a broken Dockerfile shows up on the PR
-  # and not after the merge. Main builds and publishes in `publish` instead.
-  image:
-    name: Image builds
+  # Unit and integration tests against a real Postgres and a real Garage.
+  test:
+    name: Tests
     runs-on: [self-hosted, linux, x64, sysbox]
     needs: [duplicate]
-    if: needs.duplicate.outputs.skip != 'true' && !(github.ref == 'refs/heads/main' && github.event_name == 'push')
+    if: needs.duplicate.outputs.skip != 'true'
+    services:
+      db:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bulut
+          POSTGRES_PASSWORD: bulut
+          POSTGRES_DB: bulut
+        # A dynamic port, not 5432:5432. The runner is shared and the machine's own 5432 is taken by
+        # the Postgres every dev stack uses, so a fixed port would fail the service before step one.
+        ports:
+          - 5432/tcp
+        # The data is thrown away with the job, so it has no reason to touch a disk.
+        options: >-
+          --health-cmd "pg_isready -U bulut"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data:rw,size=1g
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build
-        uses: docker/build-push-action@v7
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Start object storage
+        uses: ./.github/actions/start-garage
         with:
-          context: .
-          push: false
-          load: true
-          tags: bulut:ci
-          cache-from: type=gha,scope=bulut
-          cache-to: type=gha,mode=max,scope=bulut
+          name: bulut-garage-test-${{ github.run_id }}-${{ github.run_attempt }}
 
-      # The image must not carry local settings or secrets, and must stay small.
-      - name: Review the image
+      # The `job` context is not available in a job-level `env:`, so the database URL is set here.
+      - name: Test
+        env:
+          DATABASE_URL: postgresql://bulut:bulut@localhost:${{ job.services.db.ports['5432'] }}/bulut
+          S3_ENDPOINT_URL: http://localhost:${{ env.S3_PORT }}
+          S3_BUCKET: bulut-ci
+          S3_ACCESS_KEY_ID: GK00000000000000000000e2
+          S3_SECRET_ACCESS_KEY: "0000000000000000000000000000000000000000000000000000000000000002"
+          S3_REGION: garage
+        run: cargo test --locked
+
+      - name: Stop object storage
+        if: always()
+        run: docker rm -f bulut-garage-test-${{ github.run_id }}-${{ github.run_attempt }} || true
+
+  # The real app in a real browser, with large and parallel uploads, against the same services.
+  # Its own job: it takes minutes where the tests take seconds, and a failure here should not hide
+  # a failure there.
+  e2e:
+    name: End-to-end
+    runs-on: [self-hosted, linux, x64, sysbox]
+    needs: [duplicate]
+    if: needs.duplicate.outputs.skip != 'true'
+    services:
+      db:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bulut
+          POSTGRES_PASSWORD: bulut
+          POSTGRES_DB: bulut_e2e
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U bulut"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data:rw,size=1g
+    env:
+      # 200 MB instead of 1 GB: the same code path (chunks, resume) without hogging the shared runner.
+      BULUT_E2E_BIG: "200000000"
+      SHOTS_DIR: ${{ github.workspace }}/e2e-shots
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      # Keyed on the Playwright version, so a browser download only happens when it is bumped.
+      - name: Install Playwright
+        run: npm install --no-save --no-audit --no-fund playwright@1.62.1
+
+      - name: Cache the browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-1.62.1
+
+      # --only-shell: the suite is headless, so the headless shell is all it needs.
+      - name: Install the browsers
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Start object storage
+        uses: ./.github/actions/start-garage
+        with:
+          name: bulut-garage-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Build the app
+        run: cargo build --locked
+
+      - name: Start the app
+        id: app
+        env:
+          DATABASE_URL: postgresql://bulut:bulut@localhost:${{ job.services.db.ports['5432'] }}/bulut_e2e
+          S3_ENDPOINT_URL: http://localhost:${{ env.S3_PORT }}
+          S3_BUCKET: bulut-e2e
+          S3_ACCESS_KEY_ID: GK00000000000000000000e2
+          S3_SECRET_ACCESS_KEY: "0000000000000000000000000000000000000000000000000000000000000002"
+          S3_REGION: garage
+          APP_ENV: testing
+          LOG_LEVEL: info
         run: |
-          size=$(docker image inspect bulut:ci --format '{{.Size}}')
-          echo "Image size: $((size / 1024 / 1024)) MiB" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$size" -gt 50000000 ]; then
-            echo "The image is larger than 50 MB." >&2
-            exit 1
-          fi
-          if docker history --no-trunc bulut:ci | grep -Ei 'password|secret|\.env|DATABASE_URL=|S3_SECRET'; then
-            echo "The image history mentions a setting or secret." >&2
-            exit 1
-          fi
+          set -euo pipefail
+          port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+          echo "port=$port" >> "$GITHUB_OUTPUT"
+          PORT=$port BASE_URL=http://localhost:$port nohup setsid ./target/debug/bulut > "$RUNNER_TEMP/app.log" 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl -sf "http://localhost:$port/healthz" >/dev/null; then
+              echo "app answering after ${attempt}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/app.log"
+          echo "the app did not start" >&2
+          exit 1
 
-  # Main only: bump the patch version, commit it, and hand the new commit to `publish`.
-  # The version file is the single source: the binary embeds it, the UI footer and /api/version show it.
+      - name: Browser test
+        run: node e2e/ui.test.js "http://localhost:${{ steps.app.outputs.port }}"
+
+      - name: Large upload with a resume
+        run: python3 e2e/big_upload.py "http://localhost:${{ steps.app.outputs.port }}"
+
+      - name: Parallel uploads
+        run: python3 e2e/parallel_upload.py "http://localhost:${{ steps.app.outputs.port }}"
+
+      - name: Stop object storage
+        if: always()
+        run: docker rm -f bulut-garage-e2e-${{ github.run_id }}-${{ github.run_attempt }} || true
+
+      - name: Keep the logs and screenshots of a failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            ${{ runner.temp }}/app.log
+            e2e-shots/
+          retention-days: 7
+
+  # Main only: bump the patch version, commit and tag it, and hand the new commit to `image`.
+  # The VERSION file is the single source: the binary embeds it, the UI footer and /api/version show it.
   release:
     name: Bump version
     runs-on: [self-hosted, linux, x64, sysbox]
-    needs: [test]
+    needs: [checks, test, e2e]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: write
@@ -202,64 +312,157 @@ jobs:
           file_pattern: VERSION
           tagging_message: v${{ steps.bump.outputs.version }}
 
-  publish:
-    name: Build and push image
+  # The production image is BUILT on every run and PUSHED only from main.
+  #
+  # Built everywhere because the Dockerfile is code too: a build that only happens at publication
+  # time is a build that breaks on the day it matters. Pushed only from main, and only when a
+  # registry is configured, so a fork or a machine without REGISTRY_URL still gets the build
+  # without needing credentials.
+  image:
+    name: Build and push the image
     runs-on: [self-hosted, linux, x64, sysbox]
-    needs: [release]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.REGISTRY_URL != ''
+    needs: [checks, test, e2e, release]
+    # `release` is skipped off main, and a job whose needs were skipped is skipped with them, so
+    # the condition says out loud that skipped is fine here.
+    if: ${{ !cancelled() && needs.checks.result == 'success' && needs.test.result == 'success' && needs.e2e.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     permissions:
       contents: read
     outputs:
-      webhook_secret_set: ${{ steps.webhook_secret.outputs.set }}
+      published: ${{ steps.registry.outputs.publish }}
+      version: ${{ steps.vars.outputs.version }}
+      sha_short: ${{ steps.vars.outputs.sha_short }}
     steps:
-      - name: Checkout the bumped commit
+      # On main the image is built from the bumped commit, so the version inside matches its tag.
+      - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release.outputs.sha }}
+          ref: ${{ needs.release.outputs.sha || github.sha }}
 
-      # A job-level `if` cannot read secrets, so the webhook job gates on this output instead.
-      - name: Check webhook secret
-        id: webhook_secret
+      # A job-level `if:` cannot read secrets, so whether this run can publish is decided here.
+      - name: Can this run publish?
+        id: registry
         env:
-          IMAGE_UPDATED_WEBHOOK_URL: ${{ secrets.IMAGE_UPDATED_WEBHOOK_URL }}
-        run: echo "set=${IMAGE_UPDATED_WEBHOOK_URL:+true}" >> "$GITHUB_OUTPUT"
+          REGISTRY_URL: ${{ vars.REGISTRY_URL }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          RELEASED: ${{ needs.release.result }}
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] \
+             && [ "${{ github.ref }}" = "refs/heads/main" ] \
+             && [ "$RELEASED" = "success" ] \
+             && [ -n "$REGISTRY_URL" ] && [ -n "$REGISTRY_USERNAME" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Image built, not published (not main, or no registry configured)." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Log in to private registry
+      - name: Log in to the registry
+        if: steps.registry.outputs.publish == 'true'
         uses: docker/login-action@v4
         with:
           registry: ${{ vars.REGISTRY_URL }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Set up Docker Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Compute image name
+      - name: Name and version
         id: vars
         run: |
           echo "repo_lc=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
           echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+          version=$(tr -d '[:space:]' < VERSION)
+          test -n "$version" || { echo "could not read VERSION"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
+      # Built once and loaded, before the build that publishes: the layers come from the cache, and
+      # an image that is too big or carries a setting is not pushed.
+      - name: Build for review
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
+          push: false
+          load: true
+          tags: bulut:ci
           cache-from: type=gha,scope=bulut
           cache-to: type=gha,mode=max,scope=bulut
-          tags: |
-            ${{ vars.REGISTRY_URL }}/${{ steps.vars.outputs.repo_lc }}:latest
-            ${{ vars.REGISTRY_URL }}/${{ steps.vars.outputs.repo_lc }}:${{ steps.vars.outputs.version }}
-            ${{ vars.REGISTRY_URL }}/${{ steps.vars.outputs.repo_lc }}:${{ steps.vars.outputs.sha_short }}
 
-  image-update-webhook:
-    name: Notify image webhook
+      - name: Review the image
+        run: |
+          size=$(docker image inspect bulut:ci --format '{{.Size}}')
+          echo "Image size: $((size / 1024 / 1024)) MiB" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -gt 50000000 ]; then
+            echo "The image is larger than 50 MB." >&2
+            exit 1
+          fi
+          if docker history --no-trunc bulut:ci | grep -Ei 'password|secret|\.env|DATABASE_URL=|S3_SECRET'; then
+            echo "The image history mentions a setting or secret." >&2
+            exit 1
+          fi
+
+      # Three tags, each answering a different question: `latest` is what a compose file pulls, the
+      # short sha is what a running container can be traced back to, and the version is what the
+      # release notes call it.
+      - name: Build, and push from main
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ steps.registry.outputs.publish == 'true' }}
+          cache-from: type=gha,scope=bulut
+          tags: |
+            ${{ vars.REGISTRY_URL || 'local' }}/${{ steps.vars.outputs.repo_lc }}:latest
+            ${{ vars.REGISTRY_URL || 'local' }}/${{ steps.vars.outputs.repo_lc }}:${{ steps.vars.outputs.sha_short }}
+            ${{ vars.REGISTRY_URL || 'local' }}/${{ steps.vars.outputs.repo_lc }}:v${{ steps.vars.outputs.version }}
+
+      - name: Say what was published
+        if: steps.registry.outputs.publish == 'true'
+        run: |
+          {
+            echo "Published \`${{ steps.vars.outputs.repo_lc }}:v${{ steps.vars.outputs.version }}\`"
+            echo "(and \`latest\`, \`${{ steps.vars.outputs.sha_short }}\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Tells the server there is something new to pull. Only after an image was actually published:
+  # a webhook fired on a run that built nothing would redeploy the previous image and look like a
+  # deployment.
+  notify:
+    name: Tell the server
     runs-on: [self-hosted, linux, x64, sysbox]
-    needs: [publish]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.publish.outputs.webhook_secret_set == 'true'
+    needs: [image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.image.outputs.published == 'true'
+    permissions:
+      contents: read
     steps:
-      - name: Call the webhook
+      - name: Call the deploy hook
         env:
-          IMAGE_UPDATED_WEBHOOK_URL: ${{ secrets.IMAGE_UPDATED_WEBHOOK_URL }}
-        run: curl -sf -X POST --data-raw '' "$IMAGE_UPDATED_WEBHOOK_URL"
+          HOOK_URL: ${{ secrets.IMAGE_UPDATED_WEBHOOK_URL }}
+        run: |
+          set -uo pipefail
+          if [ -z "${HOOK_URL:-}" ]; then
+            echo "No IMAGE_UPDATED_WEBHOOK_URL, nothing to call." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # POST, not GET: a receiver typically answers 405 to anything else.
+          body=$(curl -sS -X POST -w '\n%{http_code}' "$HOOK_URL" \
+            -H 'content-type: application/json' \
+            -d '{"image":"${{ needs.image.outputs.version }}","sha":"${{ needs.image.outputs.sha_short }}"}') || {
+              echo "the hook could not be reached"
+              exit 1
+            }
+          status=$(printf '%s' "$body" | tail -1)
+          payload=$(printf '%s' "$body" | sed '$d')
+          echo "$status: $payload"
+
+          # A wrong token can still answer 200 with this sentence in the body, so `curl -f` alone
+          # stays green while nothing is deployed. The sentence is the real status.
+          case "$payload" in
+            *"Hook rules were not satisfied"*)
+              echo "the hook refused the call, check the token"
+              exit 1
+              ;;
+          esac
+
+          [ "$status" = "200" ] || { echo "the hook answered $status"; exit 1; }
+          echo "Deployment hook called for v${{ needs.image.outputs.version }}." >> "$GITHUB_STEP_SUMMARY"

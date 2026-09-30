@@ -1,0 +1,84 @@
+name: Start Garage
+description: >-
+  Starts a throwaway Garage S3 node in Docker, gives it a layout and imports a fixed access key.
+  Garage is what production runs, so CI fails on the same store. It is a step and not a service
+  container because the image needs a config file written into it before it starts.
+
+inputs:
+  name:
+    description: Container name, unique per job on the shared runner.
+    required: true
+  key-id:
+    description: Access key id to import.
+    required: false
+    default: GK00000000000000000000e2
+  key-secret:
+    description: Secret key to import. Quote it in YAML, an unquoted 00..e2 is read as the number 0.
+    required: false
+    default: "0000000000000000000000000000000000000000000000000000000000000002"
+
+outputs:
+  port:
+    description: Host port of the S3 API.
+    value: ${{ steps.start.outputs.port }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start object storage
+      id: start
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        KEY_ID: ${{ inputs.key-id }}
+        KEY_SECRET: ${{ inputs.key-secret }}
+      run: |
+        set -euo pipefail
+
+        # scratch + one binary: no shell, no curl. The config is written here and copied in
+        # before the container is started.
+        cat > "$RUNNER_TEMP/garage.toml" <<'TOML'
+        metadata_dir = "/var/lib/garage/meta"
+        data_dir = "/var/lib/garage/data"
+        db_engine = "sqlite"
+        replication_factor = 1
+        rpc_bind_addr = "[::]:3901"
+        rpc_public_addr = "127.0.0.1:3901"
+        rpc_secret = "0000000000000000000000000000000000000000000000000000000000000001"
+
+        [s3_api]
+        s3_region = "garage"
+        api_bind_addr = "[::]:3900"
+        root_domain = ".s3.garage.localhost"
+        TOML
+
+        # A port the kernel hands out: the runner is shared, and a constant is a collision
+        # waiting for the day two jobs overlap.
+        port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+        echo "port=$port" >> "$GITHUB_OUTPUT"
+        echo "S3_PORT=$port" >> "$GITHUB_ENV"
+
+        docker rm -f "$NAME" >/dev/null 2>&1 || true
+        docker create --name "$NAME" -p "$port":3900 \
+          dxflrs/garage:v2.4.1@sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020
+        docker cp "$RUNNER_TEMP/garage.toml" "$NAME":/etc/garage.toml
+        docker start "$NAME"
+
+        for attempt in $(seq 1 60); do
+          if docker exec "$NAME" /garage status >/dev/null 2>&1; then
+            echo "garage answering after ${attempt}s"
+            break
+          fi
+          sleep 1
+        done
+
+        # A fresh node holds no data until it is given a layout: without this every PutObject
+        # answers "no storage nodes found".
+        node=$(docker exec "$NAME" /garage node id -q | cut -d@ -f1)
+        docker exec "$NAME" /garage layout assign -z ci -c 1G "$node"
+        docker exec "$NAME" /garage layout apply --version 1
+
+        # The key is imported, so the credentials are the fixed ones above. It may create
+        # buckets: the app creates its own bucket at startup if it is missing.
+        docker exec "$NAME" /garage key import --yes -n ci "$KEY_ID" "$KEY_SECRET"
+        docker exec "$NAME" /garage key allow --create-bucket ci

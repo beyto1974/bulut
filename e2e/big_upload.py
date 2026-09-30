@@ -4,7 +4,7 @@ End-to-end check: 1 GB chunked upload with a simulated resume, then verified dow
 import hashlib, json, os, sys, time, urllib.request
 
 BASE = sys.argv[1]
-SIZE = 1_000_000_000
+SIZE = int(os.environ.get("BULUT_E2E_BIG", 1_000_000_000))
 PATH = os.path.join(os.environ.get("TMPDIR", "/tmp"), "bulut-big.bin")
 
 
@@ -86,7 +86,7 @@ print("downloaded in %.1fs, sha256 %s" % (time.time() - t1, got.hexdigest()[:16]
 assert got.hexdigest() == want.hexdigest(), "HASH MISMATCH"
 
 # Range from the middle.
-off = 123_456_789
+off = min(123_456_789, SIZE - 200)
 s, h, d = call("GET", f"/api/s/{code}/versions/{vid}/download", headers={"Range": f"bytes={off}-{off + 99}"})
 with open(PATH, "rb") as f:
     f.seek(off)

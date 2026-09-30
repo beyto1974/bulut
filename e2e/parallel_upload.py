@@ -6,13 +6,14 @@ so the small files must finish long before the big one and nothing may be lost o
 import concurrent.futures as cf
 import hashlib
 import json
+import os
 import sys
 import threading
 import time
 import urllib.request
 
 BASE = sys.argv[1]
-BIG = 1_000_000_000
+BIG = int(os.environ.get("BULUT_E2E_BIG", 1_000_000_000))
 SMALL_COUNT = 20
 SMALL_SIZE = 100_000
 
