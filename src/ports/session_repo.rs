@@ -7,8 +7,12 @@ use crate::domain::session::Session;
 pub enum RepoError {
     #[error("code already taken")]
     CodeTaken,
+    #[error("name already exists in this folder")]
+    NameTaken,
     #[error("not found")]
     NotFound,
+    #[error("invalid: {0}")]
+    Invalid(String),
     #[error("storage error: {0}")]
     Storage(String),
 }
