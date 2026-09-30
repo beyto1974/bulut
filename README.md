@@ -1,5 +1,11 @@
 # Bulut
 
+[![CI](https://github.com/beyto1974/bulut/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/beyto1974/bulut/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbeyto1974%2Fbulut%2Fbadges%2Fcoverage.json)](https://github.com/beyto1974/bulut/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/beyto1974/bulut)](LICENSE)
+[![Release](https://img.shields.io/github/v/tag/beyto1974/bulut?sort=semver&label=release)](https://github.com/beyto1974/bulut/tags)
+[![Image size](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fbeyto1974%2Fbulut%2Fbadges%2Fimage-size.json)](https://github.com/beyto1974/bulut/pkgs/container/bulut)
+
 A small dropbox for sessions. Each session has a short, readable link (`/k7m3q`) and holds files. People use
 the web UI, scripts and language models use the REST API, `llms.txt`, `openapi.json` or MCP. Handy for passing
 builds, logs and recordings between a development environment and a person, in either direction.
@@ -157,7 +163,8 @@ python3 e2e/file_limit.py http://localhost:8080
 `.github/workflows/ci.yml` runs on GitHub-hosted runners. Every push and pull request is checked for format,
 lint and tests (Postgres and Garage as real services), then end to end in a real browser. The image is built
 and reviewed on every run. A push to `main` bumps the patch version in `VERSION` (committed and tagged `vX.Y.Z`),
-builds the image from that commit and pushes it to `ghcr.io/beyto1974/bulut`. An optional webhook
+builds the image from that commit and pushes it to `ghcr.io/beyto1974/bulut`. The coverage and image size
+badges read small JSON files that CI keeps on the `badges` branch. An optional webhook
 (`IMAGE_UPDATED_WEBHOOK_URL` secret) tells a server to pull it. `VERSION` is the single source of the
 version: it is baked into the binary and shown in the UI footer and at `GET /api/version`.
 
