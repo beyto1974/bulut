@@ -36,6 +36,8 @@ function check(cond, msg) {
   check(page.url().endsWith('/' + code), 'url is the short link');
   check((await page.title()).startsWith(code), 'title names the code: ' + (await page.title()));
 
+  check((await page.locator('#file-count').textContent()).startsWith('0 of 100 files'), 'file counter shows the limit: ' + (await page.locator('#file-count').textContent()));
+
   // Description
   await page.click('#edit-description');
   await page.fill('#description-input', 'Regression files for the invoice parser');

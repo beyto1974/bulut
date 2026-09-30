@@ -18,6 +18,8 @@ pub struct SessionDto {
     /// When the session is deleted if nobody touches it.
     pub expires_at: DateTime<Utc>,
     pub idle_ttl_days: u32,
+    /// Most files this session can hold.
+    pub max_files: u32,
 }
 
 impl SessionDto {
@@ -31,6 +33,7 @@ impl SessionDto {
             last_activity_at: s.last_activity_at,
             expires_at: s.expires_at(ttl),
             idle_ttl_days: ttl,
+            max_files: state.config.max_files_per_session,
         }
     }
 }

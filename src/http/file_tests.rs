@@ -302,3 +302,64 @@ async fn upload_limits_and_bad_input() {
     assert_eq!(status, StatusCode::NOT_FOUND, "unknown session");
     raw(&app, Method::DELETE, &format!("/api/s/{code}"), &[], b"").await;
 }
+
+#[tokio::test]
+async fn a_full_session_answers_409_but_still_takes_new_versions() {
+    let (app, f) = app().await;
+    // The same app, with an upload service that allows two files per session.
+    let limited = std::sync::Arc::new(crate::services::limit_tests::limited_uploads(&f, 2).await);
+    let state = super::AppState {
+        config: std::sync::Arc::new(
+            crate::config::Config::from_map(&std::collections::HashMap::new()).unwrap(),
+        ),
+        version: "9.9.9",
+        sessions: f.sessions.clone(),
+        tree: f.tree.clone(),
+        uploads: limited,
+    };
+    drop(app);
+    let app = super::router(state);
+    let code = new_session(&app).await;
+
+    for name in ["one.txt", "two.txt"] {
+        let url = format!("/api/s/{code}/upload?name={name}");
+        assert_eq!(
+            raw(&app, Method::PUT, &url, &[], b"x").await.0,
+            StatusCode::CREATED
+        );
+    }
+    let (status, _, body) = raw(
+        &app,
+        Method::PUT,
+        &format!("/api/s/{code}/upload?name=three.txt"),
+        &[],
+        b"x",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let message = json_of(&body)["error"].as_str().unwrap().to_string();
+    assert!(message.contains("maximum of 2 files"), "{message}");
+
+    // The chunked path refuses at the start, before any part is sent.
+    let (status, _, _) = raw(
+        &app,
+        Method::POST,
+        &format!("/api/s/{code}/uploads"),
+        &[("content-type", "application/json")],
+        br#"{"name":"three.txt","size":1}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // A new version of an existing file is fine.
+    let (status, _, _) = raw(
+        &app,
+        Method::PUT,
+        &format!("/api/s/{code}/upload?name=one.txt"),
+        &[],
+        b"y",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    raw(&app, Method::DELETE, &format!("/api/s/{code}"), &[], b"").await;
+}

@@ -89,5 +89,8 @@ pub trait NodeRepo: Send + Sync {
         tag: Option<&str>,
     ) -> Result<Option<(Node, FileVersion)>, RepoError>;
 
+    /// Number of files (not versions) in a session.
+    async fn count_files(&self, session: &str) -> Result<i64, RepoError>;
+
     async fn set_thumb_key(&self, version_id: Uuid, key: &str) -> Result<(), RepoError>;
 }

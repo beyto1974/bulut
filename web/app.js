@@ -172,7 +172,8 @@
     const fileInput = h('input', { type: 'file', id: 'file-input', multiple: true, hidden: true });
     const drop = h('div', { class: 'drop', id: 'drop', tabindex: 0, role: 'button', 'aria-label': 'Choose files to upload' },
       'Drop files anywhere on this page, or click to choose. Uploading a name that exists adds a new version.');
-    const upload = h('div', { class: 'upload panel' }, drop, fileInput, queueEl);
+    const countEl = h('div', { class: 'muted', id: 'file-count' });
+    const upload = h('div', { class: 'upload panel' }, drop, countEl, fileInput, queueEl);
     const inspector = h('aside', { class: 'inspector panel', id: 'inspector', 'aria-live': 'polite' });
 
     const copyBtn = h('button', { class: 'btn primary', type: 'button', id: 'copy-link', text: 'Copy link', onclick: () => copyText(sess.url) });
@@ -222,6 +223,9 @@
     }
 
     function renderTable() {
+      const full = state.items.length >= sess.max_files;
+      countEl.textContent = `${state.items.length} of ${sess.max_files} files` +
+        (full ? '. This session is full: new versions of existing names still work, new names need a file deleted first.' : '');
       $('empty').hidden = state.items.length > 0;
       tableBody.replaceChildren(...state.items.map((it) => {
         const latest = it.latest;

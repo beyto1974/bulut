@@ -82,6 +82,7 @@ async fn session_lifecycle() {
     assert_eq!(code.len(), 5);
     assert_eq!(created["url"], format!("http://localhost:8080/{code}"));
     assert_eq!(created["idle_ttl_days"], 7);
+    assert_eq!(created["max_files"], 100);
     assert!(created["expires_at"].is_string());
 
     let (status, got) = call(&app, Method::GET, &format!("/api/s/{code}"), None).await;

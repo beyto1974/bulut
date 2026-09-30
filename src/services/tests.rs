@@ -50,6 +50,7 @@ pub async fn fixture() -> Fixture {
         // Small parts keep tests fast; the memory store has no 5 MiB minimum.
         part_size: 10,
         max_file_bytes: 1000,
+        max_files: 1000,
     });
     let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),

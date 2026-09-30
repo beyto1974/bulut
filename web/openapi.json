@@ -3,7 +3,7 @@
   "info": {
     "title": "Bulut",
     "version": "{{VERSION}}",
-    "description": "A small dropbox for sessions. A session has a short code, a description and files. Uploading a file with an existing name adds a new version, and versions can be tagged. The deployment is protected in front of the app, send the credentials it gave you with every request."
+    "description": "A small dropbox for sessions. A session has a short code, a description and files, at most the number in its max_files field. A new version of an existing file does not count as another file. Uploading a file with an existing name adds a new version, and versions can be tagged. The deployment is protected in front of the app, send the credentials it gave you with every request."
   },
   "servers": [{ "url": "{{BASE_URL}}" }],
   "paths": {
@@ -92,7 +92,7 @@
           { "name": "created_at", "in": "query", "required": false, "schema": { "type": "string", "format": "date-time" }, "description": "The file's own timestamp on the sender's machine." }
         ],
         "requestBody": { "required": true, "content": { "*/*": { "schema": { "type": "string", "format": "binary" } } } },
-        "responses": { "201": { "description": "Stored", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stored" } } } }, "400": { "$ref": "#/components/responses/Invalid" }, "404": { "$ref": "#/components/responses/NotFound" } }
+        "responses": { "201": { "description": "Stored", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stored" } } } }, "400": { "$ref": "#/components/responses/Invalid" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" } }
       }
     },
     "/api/s/{code}/uploads": {
@@ -101,7 +101,7 @@
         "summary": "Start a chunked upload",
         "operationId": "startUpload",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name", "size"], "properties": { "name": { "type": "string" }, "size": { "type": "integer", "format": "int64" }, "content_type": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } } } } } },
-        "responses": { "201": { "description": "Send the parts next", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UploadStatus" } } } }, "400": { "$ref": "#/components/responses/Invalid" } }
+        "responses": { "201": { "description": "Send the parts next", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UploadStatus" } } } }, "400": { "$ref": "#/components/responses/Invalid" }, "409": { "$ref": "#/components/responses/Conflict" } }
       }
     },
     "/api/s/{code}/uploads/{id}": {
@@ -211,7 +211,7 @@
     "responses": {
       "NotFound": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Invalid": { "description": "Invalid input", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "Conflict": { "description": "Conflict", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "Conflict": { "description": "Conflict, for example the session already holds its maximum number of files", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
     },
     "schemas": {
       "Error": { "type": "object", "properties": { "error": { "type": "string" } } },
@@ -224,7 +224,8 @@
           "created_at": { "type": "string", "format": "date-time" },
           "last_activity_at": { "type": "string", "format": "date-time" },
           "expires_at": { "type": "string", "format": "date-time", "description": "When the session is deleted if nothing touches it." },
-          "idle_ttl_days": { "type": "integer" }
+          "idle_ttl_days": { "type": "integer" },
+          "max_files": { "type": "integer", "description": "Most files this session can hold. A new name beyond it is refused with 409." }
         }
       },
       "Node": {

@@ -25,6 +25,7 @@ pub async fn render_index(state: &AppState, code: &str) -> Result<String, Servic
         &state.config.base_url,
         &session,
         state.config.session_idle_ttl_days,
+        state.config.max_files_per_session,
         &walk,
     ))
 }
@@ -46,6 +47,7 @@ pub async fn general_llms(State(state): State<AppState>) -> Response {
         state.config.code_length,
         state.config.session_idle_ttl_days,
         state.config.max_file_bytes,
+        state.config.max_files_per_session,
     ))
 }
 

@@ -23,7 +23,9 @@ pub fn build_state(
     blobs: Arc<dyn BlobStore>,
     version: &'static str,
 ) -> AppState {
-    let nodes = Arc::new(PgNodeRepo::new(pool.clone()));
+    let nodes = Arc::new(
+        PgNodeRepo::new(pool.clone()).with_max_files(i64::from(config.max_files_per_session)),
+    );
     let clock = Arc::new(SystemClock);
     let uploads = Arc::new(UploadService {
         folders_enabled: config.folders_enabled,
@@ -33,6 +35,7 @@ pub fn build_state(
         clock: clock.clone(),
         part_size: config.chunk_size,
         max_file_bytes: config.max_file_bytes,
+        max_files: config.max_files_per_session,
     });
     let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),

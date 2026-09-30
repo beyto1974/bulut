@@ -41,7 +41,13 @@ fn when(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%d %H:%M UTC").to_string()
 }
 
-pub fn session_index(base_url: &str, session: &Session, idle_ttl_days: u32, walk: &Walk) -> String {
+pub fn session_index(
+    base_url: &str,
+    session: &Session,
+    idle_ttl_days: u32,
+    max_files: u32,
+    walk: &Walk,
+) -> String {
     let code = &session.code;
     let files: Vec<_> = walk
         .items
@@ -67,7 +73,7 @@ pub fn session_index(base_url: &str, session: &Session, idle_ttl_days: u32, walk
     let _ = writeln!(o, "- Link: {base_url}/{code}");
     let _ = writeln!(
         o,
-        "- Files: {} ({} in the newest versions)",
+        "- Files: {} of {max_files} ({} in the newest versions)",
         files.len(),
         human_size(total)
     );
@@ -158,6 +164,7 @@ pub fn general_index(
     code_length: usize,
     idle_ttl_days: u32,
     max_file_bytes: u64,
+    max_files: u32,
 ) -> String {
     format!(
         "# Bulut
@@ -170,6 +177,7 @@ pub fn general_index(
 - A session code is {code_length} characters of lowercase letters and digits, without look-alikes (no 0, o, 1, l, i).
 - A session is deleted after {idle_ttl_days} days without any activity. Viewing, downloading and uploading all count as activity.
 - Files can be up to {max_size}. Larger files are sent in chunks, small ones with a single request.
+- A session holds at most {max_files} files. A new version of an existing file does not count as another file.
 - Access is controlled in front of the app, send the credentials your deployment gave you with every request.
 
 ## Common calls
@@ -298,10 +306,10 @@ mod tests {
     #[test]
     fn session_index_lists_files_versions_tags_and_dates() {
         let (session, walk) = sample();
-        let text = session_index("https://bulut.dev", &session, 7, &walk);
+        let text = session_index("https://bulut.dev", &session, 7, 100, &walk);
         assert!(text.starts_with("# Session k7m3q\n\n> Run 14\n> for the reviewer\n"));
         assert!(text.contains("- Link: https://bulut.dev/k7m3q"));
-        assert!(text.contains("- Files: 2 (48.4 MB in the newest versions)"));
+        assert!(text.contains("- Files: 2 of 100 (48.4 MB in the newest versions)"));
         assert!(text.contains("- Expires: 2026-10-07 10:00 UTC."));
         assert!(text.contains("- fixtures/ (folder, 1 items, id "));
         assert!(text.contains("Note: only the failing ones"));
@@ -325,12 +333,14 @@ mod tests {
             items: vec![],
             truncated: false,
         };
-        assert!(session_index("http://x", &session, 7, &empty).contains("This session is empty."));
+        assert!(
+            session_index("http://x", &session, 7, 100, &empty).contains("This session is empty.")
+        );
         let cut = Walk {
             items: vec![],
             truncated: true,
         };
-        assert!(session_index("http://x", &session, 7, &cut).contains("The list is cut off"));
+        assert!(session_index("http://x", &session, 7, 100, &cut).contains("The list is cut off"));
     }
 
     #[test]
@@ -344,10 +354,11 @@ mod tests {
 
     #[test]
     fn general_index_mentions_the_key_facts() {
-        let text = general_index("https://bulut.dev", 5, 7, 1_073_741_824);
+        let text = general_index("https://bulut.dev", 5, 7, 1_073_741_824, 100);
         assert!(text.contains("5 characters of lowercase letters and digits"));
         assert!(text.contains("after 7 days without any activity"));
         assert!(text.contains("up to 1.1 GB"));
+        assert!(text.contains("at most 100 files"));
         assert!(text.contains("https://bulut.dev/openapi.json"));
         assert!(text.contains("https://bulut.dev/mcp"));
     }

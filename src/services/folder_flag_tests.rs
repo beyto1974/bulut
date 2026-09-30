@@ -29,6 +29,7 @@ async fn folders_are_refused_when_disabled_but_root_files_still_work() {
         clock: f.uploads.clock.clone(),
         part_size: 10,
         max_file_bytes: 1000,
+        max_files: 1000,
     };
 
     assert!(matches!(

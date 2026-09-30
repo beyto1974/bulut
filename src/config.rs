@@ -59,6 +59,8 @@ pub struct Config {
     pub code_length: usize,
     pub chunk_size: usize,
     pub max_file_bytes: u64,
+    /// Most files one session can hold. New versions of an existing file do not count.
+    pub max_files_per_session: u32,
     /// Folder support is built but switched off until the UI handles it.
     pub folders_enabled: bool,
     pub session_idle_ttl_days: u32,
@@ -104,6 +106,14 @@ impl Config {
         if max_file_bytes == 0 {
             return Err(ConfigError::Invalid("MAX_FILE_BYTES", "0".into()));
         }
+        let max_files_per_session: u32 =
+            num("MAX_FILES_PER_SESSION", get("MAX_FILES_PER_SESSION"), 100)?;
+        if !(1..=100_000).contains(&max_files_per_session) {
+            return Err(ConfigError::Invalid(
+                "MAX_FILES_PER_SESSION",
+                max_files_per_session.to_string(),
+            ));
+        }
         let folders_enabled = match get("FOLDERS_ENABLED") {
             None => false,
             Some(v) => match v.to_ascii_lowercase().as_str() {
@@ -134,6 +144,7 @@ impl Config {
             code_length,
             chunk_size,
             max_file_bytes,
+            max_files_per_session,
             folders_enabled,
             session_idle_ttl_days,
             sweep_interval_secs: num("SWEEP_INTERVAL_SECS", get("SWEEP_INTERVAL_SECS"), 3600)?,
@@ -162,6 +173,7 @@ mod tests {
         assert_eq!(c.session_idle_ttl_days, 7);
         assert_eq!(c.max_file_bytes, 1024 * 1024 * 1024);
         assert!(!c.folders_enabled, "folders are off by default");
+        assert_eq!(c.max_files_per_session, 100);
         assert_eq!(c.base_url, "http://localhost:8080");
     }
 
@@ -192,6 +204,8 @@ mod tests {
         assert!(Config::from_map(&vars(&[("SESSION_IDLE_TTL_DAYS", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("FOLDERS_ENABLED", "maybe")])).is_err());
+        assert!(Config::from_map(&vars(&[("MAX_FILES_PER_SESSION", "0")])).is_err());
+        assert!(Config::from_map(&vars(&[("MAX_FILES_PER_SESSION", "many")])).is_err());
         // 100 GB in 8 MiB parts is 11920 parts, more than S3 allows.
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "100000000000")])).is_err());
         assert!(Config::from_map(&vars(&[

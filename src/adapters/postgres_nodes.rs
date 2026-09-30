@@ -23,11 +23,21 @@ fn is_unique(e: &sqlx::Error) -> bool {
 #[derive(Clone)]
 pub struct PgNodeRepo {
     pool: PgPool,
+    max_files: i64,
 }
 
 impl PgNodeRepo {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            max_files: i64::MAX,
+        }
+    }
+
+    /// Most files one session may hold. New versions of an existing file do not count.
+    pub fn with_max_files(mut self, max_files: i64) -> Self {
+        self.max_files = max_files;
+        self
     }
 }
 
@@ -131,6 +141,24 @@ impl PgNodeRepo {
                 node
             }
             None => {
+                // Count and insert under one lock per session, so parallel uploads of new names
+                // cannot push the session past its limit. The lock ends with the transaction.
+                sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                    .bind(session)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(storage)?;
+                let files: i64 = sqlx::query(
+                    "SELECT count(*) AS n FROM nodes WHERE session_code = $1 AND kind = 'file'",
+                )
+                .bind(session)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(storage)?
+                .get("n");
+                if files >= self.max_files {
+                    return Err(RepoError::LimitReached(self.max_files));
+                }
                 let inserted = sqlx::query(&format!(
                     "INSERT INTO nodes (id, session_code, parent_id, kind, name, created_at)
                      VALUES ($1, $2, $3, 'file', $4, $5) RETURNING {NODE_COLS}"
@@ -478,6 +506,19 @@ impl NodeRepo for PgNodeRepo {
         Ok(Some((node, version)))
     }
 
+    async fn count_files(&self, session: &str) -> Result<i64, RepoError> {
+        Ok(
+            sqlx::query(
+                "SELECT count(*) AS n FROM nodes WHERE session_code = $1 AND kind = 'file'",
+            )
+            .bind(session)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(storage)?
+            .get("n"),
+        )
+    }
+
     async fn set_thumb_key(&self, version_id: Uuid, key: &str) -> Result<(), RepoError> {
         sqlx::query("UPDATE file_versions SET thumb_key = $2 WHERE id = $1")
             .bind(version_id)
@@ -669,6 +710,58 @@ mod tests {
         assert_eq!(list[0].version_count, 8);
         let all = repo.versions(&s, list[0].node.id).await.unwrap();
         assert_eq!(all.iter().filter(|v| v.is_latest).count(), 1);
+        sessions.delete(&s).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_file_limit_holds_even_when_uploads_race() {
+        let (repo, sessions, s) = setup().await;
+        let repo = repo.with_max_files(3);
+        let now = Utc::now();
+        repo.add_version(&s, None, "a", nv("k-a", 1), now)
+            .await
+            .unwrap();
+        // A new version of an existing file is not a new file.
+        repo.add_version(&s, None, "a", nv("k-a2", 1), now)
+            .await
+            .unwrap();
+
+        // Six new names at once, two slots left: exactly two fit.
+        let mut handles = Vec::new();
+        for i in 0..6 {
+            let (repo, s) = (repo.clone(), s.clone());
+            handles.push(tokio::spawn(async move {
+                repo.add_version(
+                    &s,
+                    None,
+                    &format!("p{i}"),
+                    nv(&format!("k{i}"), 1),
+                    Utc::now(),
+                )
+                .await
+            }));
+        }
+        let mut results = Vec::new();
+        for h in handles {
+            results.push(h.await.unwrap());
+        }
+        let stored = results.iter().filter(|r| r.is_ok()).count();
+        let refused = results
+            .iter()
+            .filter(|r| matches!(r, Err(RepoError::LimitReached(3))))
+            .count();
+        assert_eq!((stored, refused), (2, 4));
+        assert_eq!(repo.count_files(&s).await.unwrap(), 3);
+
+        // Versions still fit when the session is full, and a deleted file frees a slot.
+        repo.add_version(&s, None, "a", nv("k-a3", 1), now)
+            .await
+            .unwrap();
+        let first = repo.list(&s, None).await.unwrap()[0].node.id;
+        repo.delete(&s, first).await.unwrap();
+        repo.add_version(&s, None, "again", nv("k-new", 1), now)
+            .await
+            .unwrap();
         sessions.delete(&s).await.unwrap();
     }
 

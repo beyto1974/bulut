@@ -9,6 +9,8 @@ pub enum RepoError {
     CodeTaken,
     #[error("name already exists in this folder")]
     NameTaken,
+    #[error("session file limit reached ({0})")]
+    LimitReached(i64),
     #[error("not found")]
     NotFound,
     #[error("invalid: {0}")]

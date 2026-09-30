@@ -70,6 +70,7 @@ pub struct UploadService {
     pub clock: Arc<dyn Clock>,
     pub part_size: usize,
     pub max_file_bytes: u64,
+    pub max_files: u32,
 }
 
 fn clean_content_type(ct: Option<String>) -> String {
@@ -85,6 +86,31 @@ impl UploadService {
                 "file is larger than the limit of {} bytes",
                 self.max_file_bytes
             )));
+        }
+        Ok(())
+    }
+
+    /// A new name needs room in the session; a new version of an existing file does not. The
+    /// repository enforces the same limit atomically, this only refuses early.
+    async fn check_room(
+        &self,
+        session: &str,
+        parent: Option<Uuid>,
+        name: &str,
+    ) -> Result<(), ServiceError> {
+        if self
+            .nodes
+            .find_version(session, parent, name, None)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if self.nodes.count_files(session).await? >= i64::from(self.max_files) {
+            return Err(
+                crate::ports::session_repo::RepoError::LimitReached(i64::from(self.max_files))
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -126,6 +152,7 @@ impl UploadService {
         }
         self.check_size(new.size as u64)?;
         self.check_parent(session, new.parent).await?;
+        self.check_room(session, new.parent, &name).await?;
 
         let content_type = clean_content_type(new.content_type);
         let blob_key = format!("{session}/{}", Uuid::new_v4());
@@ -344,6 +371,7 @@ impl UploadService {
             .map(|t| validate_tag(t).map_err(|m| ServiceError::Invalid(m.into())))
             .collect::<Result<_, _>>()?;
         self.check_parent(session, parent).await?;
+        self.check_room(session, parent, &name).await?;
         let content_type = clean_content_type(content_type);
         let key = format!("{session}/{}", Uuid::new_v4());
         let upload_id = self.blobs.start_multipart(&key, &content_type).await?;
