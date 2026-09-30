@@ -71,6 +71,8 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.percent }}
     services:
       db:
         image: postgres:17-alpine
@@ -93,9 +95,16 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: llvm-tools-preview
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Start object storage
         uses: ./.github/actions/start-garage
@@ -103,7 +112,10 @@ jobs:
           name: bulut-garage-test
 
       # The `job` context is not available in a job-level `env:`, so the database URL is set here.
-      - name: Test
+      # `cargo llvm-cov` runs the same tests as `cargo test --locked`, instrumented, so coverage costs
+      # no second run. The line percentage goes to the badge job.
+      - name: Test with coverage
+        id: coverage
         env:
           DATABASE_URL: postgresql://bulut:bulut@localhost:${{ job.services.db.ports['5432'] }}/bulut
           S3_ENDPOINT_URL: http://localhost:${{ env.S3_PORT }}
@@ -111,7 +123,12 @@ jobs:
           S3_ACCESS_KEY_ID: GK00000000000000000000e2
           S3_SECRET_ACCESS_KEY: "0000000000000000000000000000000000000000000000000000000000000002"
           S3_REGION: garage
-        run: cargo test --locked
+        run: |
+          set -euo pipefail
+          cargo llvm-cov --locked --json --summary-only --output-path coverage.json
+          percent=$(jq -r '.data[0].totals.lines.percent * 10 | round / 10' coverage.json)
+          echo "percent=$percent" >> "$GITHUB_OUTPUT"
+          echo "## Line coverage: ${percent}%" >> "$GITHUB_STEP_SUMMARY"
 
   # The real app in a real browser, with large and parallel uploads, against the same services.
   # Its own job: it takes minutes where the tests take seconds, and a failure here should not hide
@@ -278,6 +295,7 @@ jobs:
       published: ${{ steps.registry.outputs.publish }}
       version: ${{ steps.vars.outputs.version }}
       sha_short: ${{ steps.vars.outputs.sha_short }}
+      size_mb: ${{ steps.review.outputs.size_mb }}
     steps:
       # On main the image is built from the bumped commit, so the version inside matches its tag.
       - name: Checkout
@@ -335,8 +353,10 @@ jobs:
           cache-to: type=gha,mode=max,scope=bulut
 
       - name: Review the image
+        id: review
         run: |
           size=$(docker image inspect bulut:ci --format '{{.Size}}')
+          echo "size_mb=$((size / 1024 / 1024))" >> "$GITHUB_OUTPUT"
           echo "Image size: $((size / 1024 / 1024)) MiB" >> "$GITHUB_STEP_SUMMARY"
           if [ "$size" -gt 50000000 ]; then
             echo "The image is larger than 50 MB." >&2
@@ -376,6 +396,55 @@ jobs:
             echo "Published \`$IMAGE:v$VERSION\`"
             echo "(and \`latest\`, \`$SHA\`)."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Publishes the numbers behind the coverage and image size badges to the `badges` branch, as
+  # shields.io endpoint files. No third-party service and no token beyond the workflow's own: the
+  # README badges read the files from raw.githubusercontent.com. Only after an image was published,
+  # so the badges describe what is on main.
+  badges:
+    name: Update the badges
+    runs-on: ubuntu-latest
+    needs: [test, image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.image.outputs.published == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Write and push the endpoint files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COVERAGE: ${{ needs.test.outputs.coverage }}
+          SIZE_MB: ${{ needs.image.outputs.size_mb }}
+        run: |
+          set -euo pipefail
+          # Both values are interpolated into JSON, so they have to be plain numbers.
+          printf '%s' "$COVERAGE" | grep -Eq '^[0-9]+(\.[0-9]+)?$' || { echo "bad coverage value" >&2; exit 1; }
+          printf '%s' "$SIZE_MB" | grep -Eq '^[0-9]+$' || { echo "bad size value" >&2; exit 1; }
+
+          color=$(awk -v c="$COVERAGE" 'BEGIN { print (c >= 90 ? "brightgreen" : c >= 75 ? "green" : c >= 60 ? "yellow" : "red") }')
+
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git init --quiet badges
+          cd badges
+          git remote add origin "https://github.com/$REPO.git"
+          if git -c "http.extraheader=$auth" fetch --quiet --depth 1 origin badges; then
+            git checkout --quiet -B badges FETCH_HEAD
+          else
+            git checkout --quiet --orphan badges
+          fi
+
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$COVERAGE" "$color" > coverage.json
+          printf '{"schemaVersion":1,"label":"image size","message":"%s MB","color":"blue"}\n' "$SIZE_MB" > image-size.json
+
+          git add coverage.json image-size.json
+          if git diff --cached --quiet; then
+            echo "Badges unchanged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "chore(badges): coverage ${COVERAGE}%, image ${SIZE_MB} MB [skip ci]"
+          git -c "http.extraheader=$auth" push --quiet origin badges
+          echo "Badges updated: coverage ${COVERAGE}%, image ${SIZE_MB} MB." >> "$GITHUB_STEP_SUMMARY"
 
   # Tells a server there is something new to pull. Optional: it only runs when the secret exists,
   # and only after an image was actually published, because a webhook fired on a run that built
