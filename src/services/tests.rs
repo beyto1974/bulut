@@ -107,6 +107,18 @@ async fn create_then_open_returns_the_session() {
 }
 
 #[tokio::test]
+async fn opening_reports_the_activity_it_just_recorded() {
+    let f = fixture().await;
+    let s = f.sessions.create("").await.unwrap();
+    f.clock.advance(Duration::days(3));
+    let opened = f.sessions.open(&s.code).await.unwrap();
+    // The expiry a visitor sees counts from this visit, not from the previous one.
+    assert_eq!(opened.last_activity_at, f.clock.now());
+    assert_eq!(opened.expires_at(7), f.clock.now() + Duration::days(7));
+    f.sessions.delete(&s.code).await.unwrap();
+}
+
+#[tokio::test]
 async fn bad_codes_are_not_found_not_errors() {
     let f = fixture().await;
     for bad in ["", "abc", "k7m3o", "toolongcode", "k7m3-"] {

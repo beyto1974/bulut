@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderValue};
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::Config;
 use crate::services::session_service::SessionService;
@@ -18,6 +20,7 @@ pub mod files;
 pub mod mcp;
 pub mod sessions;
 pub mod tree;
+pub mod ui;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -32,6 +35,11 @@ pub fn router(state: AppState) -> Router {
     // A part is at most one chunk; allow a little slack for clients that add framing.
     let part_limit = state.config.chunk_size + 1024;
     Router::new()
+        .route("/", get(ui::home))
+        .route("/assets/app.css", get(ui::css))
+        .route("/assets/app.js", get(ui::js))
+        .route("/{code}", get(ui::session_page))
+        .route("/api/s/{code}/qr.svg", get(ui::qr))
         .route("/healthz", get(healthz))
         .route("/api/version", get(version))
         .route("/llms.txt", get(agent::general_llms))
@@ -80,6 +88,15 @@ pub fn router(state: AppState) -> Router {
             get(files::download_version),
         )
         .with_state(state)
+        // Files and pages are user content or carry user content: never sniff types, never leak the URL.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
 }
 
 async fn healthz() -> Json<Value> {
@@ -99,3 +116,5 @@ mod agent_tests;
 mod file_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ui_tests;

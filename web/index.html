@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-config="{{CONFIG}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <a class="brand" href="/">bulut</a>
+    <span id="env-badge" class="env" hidden></span>
+  </header>
+  <main id="main" aria-live="polite"></main>
+  <footer class="foot">
+    <span id="footer-version"></span>
+  </footer>
+</div>
+
+<dialog id="qr-dialog" aria-labelledby="qr-title">
+  <div class="dialog-body">
+    <h2 id="qr-title">Scan to open this session</h2>
+    <img id="qr-image" alt="QR code of the session link" width="280" height="280">
+    <code id="qr-url" class="select-all"></code>
+    <div class="row">
+      <a id="qr-download" class="btn" href="#">Download SVG</a>
+      <button id="qr-close" class="btn primary" type="button">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<div id="toasts" role="status" aria-live="polite"></div>
+<script src="/assets/app.js" defer></script>
+</body>
+</html>

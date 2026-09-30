@@ -6,6 +6,7 @@ pub mod http;
 pub mod llms;
 pub mod logging;
 pub mod ports;
+pub mod qr;
 pub mod services;
 pub mod storage_config;
 

@@ -8,8 +8,8 @@
 - [x] 5. S3 blob store, chunked resumable uploads, range downloads
 - [x] 6. Versions, tags, created and uploaded times
 - [x] 8. Agent access: `llms.txt`, MCP tools
-- [ ] 9. Web UI (from the chosen mockup), env badge, version footer
-- [ ] 10. QR code: `/qr.svg` and dialog
+- [x] 9. Web UI (from the chosen mockup), env badge, version footer
+- [x] 10. QR code: `/qr.svg` and dialog
 - [x] 11. Idle sweeper (7 days, from `.env`)
 - [ ] 12. CI (mirror the tako CI config), auto version bump, final image review
 

@@ -5,6 +5,8 @@ services:
     env_file: .env
     environment:
       PORT: "8080"
+      # Short links and the QR code use this, so it should match how the app is reached.
+      BASE_URL: ${BASE_URL:-http://localhost:${HOST_PORT:-8080}}
     ports:
       - "127.0.0.1:${HOST_PORT:-8080}:8080"
     restart: unless-stopped

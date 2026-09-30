@@ -31,11 +31,13 @@ tower-http = { version = "0.6", features = ["cors", "trace", "set-header"] }
 aws-sdk-s3 = "1"
 aws-config = "1"
 aws-credential-types = "1"
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 dotenvy = "0.15"
+rqrr = "0.9"
 
 [profile.release]
 lto = true

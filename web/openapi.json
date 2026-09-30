@@ -155,6 +155,15 @@
         "responses": { "200": { "description": "The file" }, "206": { "description": "Part of the file" }, "404": { "$ref": "#/components/responses/NotFound" }, "416": { "description": "Range not satisfiable" } }
       }
     },
+    "/api/s/{code}/qr.svg": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "get": {
+        "summary": "QR code of the session link, as SVG",
+        "operationId": "sessionQr",
+        "parameters": [{ "name": "download", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Any value makes the browser save the file." }],
+        "responses": { "200": { "description": "SVG image", "content": { "image/svg+xml": { "schema": { "type": "string" } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
     "/{code}/llms.txt": {
       "parameters": [{ "$ref": "#/components/parameters/code" }],
       "get": {

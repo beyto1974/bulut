@@ -58,15 +58,20 @@ impl SessionService {
     pub async fn open(&self, raw_code: &str) -> Result<Session, ServiceError> {
         let code =
             ShortCode::parse(raw_code, self.code_length).map_err(|_| ServiceError::NotFound)?;
-        let session = self
+        let mut session = self
             .sessions
             .get(code.as_str())
             .await?
             .ok_or(ServiceError::NotFound)?;
         let now = self.clock.now();
-        self.sessions
+        // Report the activity we just recorded, so the expiry shown to the visitor is current.
+        if self
+            .sessions
             .touch(code.as_str(), now, TOUCH_THROTTLE_SECS)
-            .await?;
+            .await?
+        {
+            session.last_activity_at = now;
+        }
         Ok(session)
     }
 
