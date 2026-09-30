@@ -47,7 +47,7 @@ gh api -X PUT repos/$REPO/private-vulnerability-reporting
 # Code scanning with CodeQL, default setup.
 gh api -X PATCH repos/$REPO/code-scanning/default-setup \
   -f state=configured -f query_suite=default \
-  -f 'languages[]=actions' -f 'languages[]=javascript-typescript' -f 'languages[]=rust'
+  -f 'languages[]=actions' -f 'languages[]=javascript-typescript'
 
 # Workflows get a read-only token by default and cannot approve pull requests.
 gh api -X PUT repos/$REPO/actions/permissions/workflow \
