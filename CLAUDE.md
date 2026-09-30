@@ -16,7 +16,8 @@ Rust (axum) service, Postgres via sqlx, S3 (Garage) for blobs, plain-JS UI in `w
 `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check`, `docker compose build`.
 
 ## Decisions
-- Access is the link itself (no accounts). Optional per-session PIN.
+- No authentication in the app, by design: no accounts, no PINs, no tokens. The deployment is protected at the
+  Traefik level (bearer token for agents and REST, basic auth for humans). Do not add auth code to the app.
 - Idle expiry: `sessions.last_activity_at` is touched on any access (throttled to once per minute per session).
   A sweeper deletes sessions idle longer than `SESSION_IDLE_TTL_DAYS`, including blobs.
 - Same name in a folder creates a new file version. The `latest` tag moves to the newest upload.

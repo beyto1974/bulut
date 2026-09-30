@@ -12,6 +12,11 @@ People use the web UI, LLM agents use REST, `llms.txt`, `openapi.json` or the MC
 - A session is deleted after `SESSION_IDLE_TTL_DAYS` (default 7) days without any activity: views, downloads,
   uploads and API reads all count as activity.
 
+## Access control
+
+The app has no authentication of its own. It is protected at the Traefik level: a bearer token for agents and
+REST clients, and basic auth for humans using the web UI. The short code only identifies a session, it is not a secret.
+
 ## Configuration
 
 Copy `.env.example` to `.env`. Settings are read from the environment.

@@ -22,8 +22,8 @@ static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub struct Fixture {
     _guard: tokio::sync::MutexGuard<'static, ()>,
-    pub sessions: SessionService,
-    pub tree: TreeService,
+    pub sessions: Arc<SessionService>,
+    pub tree: Arc<TreeService>,
     pub nodes: Arc<PgNodeRepo>,
     pub blobs: Arc<MemoryBlobStore>,
     pub clock: Arc<ManualClock>,
@@ -38,7 +38,7 @@ pub async fn fixture() -> Fixture {
     let nodes = Arc::new(PgNodeRepo::new(pool.clone()));
     // Start far in the past so a sweep here never reaches sessions other tests made with the real clock.
     let clock = Arc::new(ManualClock::new(Utc::now() - Duration::days(120)));
-    let sessions = SessionService {
+    let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),
         nodes: nodes.clone(),
         blobs: blobs.clone(),
@@ -46,12 +46,12 @@ pub async fn fixture() -> Fixture {
         clock: clock.clone(),
         code_length: 5,
         idle_ttl_days: 7,
-    };
-    let tree = TreeService {
+    });
+    let tree = Arc::new(TreeService {
         nodes: nodes.clone(),
         blobs: blobs.clone(),
         clock: clock.clone(),
-    };
+    });
     Fixture {
         _guard: guard,
         sessions,

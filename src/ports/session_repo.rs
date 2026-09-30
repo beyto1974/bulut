@@ -24,13 +24,10 @@ pub trait SessionRepo: Send + Sync {
         &self,
         code: &str,
         description: &str,
-        pin_hash: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<Session, RepoError>;
 
     async fn get(&self, code: &str) -> Result<Option<Session>, RepoError>;
-
-    async fn pin_hash(&self, code: &str) -> Result<Option<String>, RepoError>;
 
     async fn set_description(&self, code: &str, description: &str) -> Result<(), RepoError>;
 

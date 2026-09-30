@@ -36,12 +36,14 @@ impl AppEnv {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfigError {
     Invalid(&'static str, String),
+    Missing(&'static str),
 }
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Invalid(key, value) => write!(f, "invalid value for {key}: {value:?}"),
+            Self::Missing(key) => write!(f, "{key} is required"),
         }
     }
 }

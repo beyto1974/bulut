@@ -38,7 +38,7 @@ impl SessionService {
             let code = self.codes.generate();
             match self
                 .sessions
-                .create(code.as_str(), description, None, self.clock.now())
+                .create(code.as_str(), description, self.clock.now())
                 .await
             {
                 Ok(s) => return Ok(s),

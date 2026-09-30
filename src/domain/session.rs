@@ -5,7 +5,6 @@ use serde::Serialize;
 pub struct Session {
     pub code: String,
     pub description: String,
-    pub has_pin: bool,
     pub created_at: DateTime<Utc>,
     pub last_activity_at: DateTime<Utc>,
 }
@@ -30,7 +29,6 @@ mod tests {
         Session {
             code: "k7m3q".into(),
             description: String::new(),
-            has_pin: false,
             created_at: last,
             last_activity_at: last,
         }

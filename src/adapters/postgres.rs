@@ -35,7 +35,6 @@ fn row_to_session(row: &sqlx::postgres::PgRow) -> Session {
     Session {
         code: row.get("code"),
         description: row.get("description"),
-        has_pin: row.get::<Option<String>, _>("pin_hash").is_some(),
         created_at: row.get("created_at"),
         last_activity_at: row.get("last_activity_at"),
     }
@@ -47,17 +46,15 @@ impl SessionRepo for PgSessionRepo {
         &self,
         code: &str,
         description: &str,
-        pin_hash: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<Session, RepoError> {
         let res = sqlx::query(
-            "INSERT INTO sessions (code, description, pin_hash, created_at, last_activity_at)
-             VALUES ($1, $2, $3, $4, $4)
-             RETURNING code, description, pin_hash, created_at, last_activity_at",
+            "INSERT INTO sessions (code, description, created_at, last_activity_at)
+             VALUES ($1, $2, $3, $3)
+             RETURNING code, description, created_at, last_activity_at",
         )
         .bind(code)
         .bind(description)
-        .bind(pin_hash)
         .bind(now)
         .fetch_one(&self.pool)
         .await;
@@ -70,7 +67,7 @@ impl SessionRepo for PgSessionRepo {
 
     async fn get(&self, code: &str) -> Result<Option<Session>, RepoError> {
         let row = sqlx::query(
-            "SELECT code, description, pin_hash, created_at, last_activity_at
+            "SELECT code, description, created_at, last_activity_at
              FROM sessions WHERE code = $1",
         )
         .bind(code)
@@ -78,15 +75,6 @@ impl SessionRepo for PgSessionRepo {
         .await
         .map_err(storage)?;
         Ok(row.as_ref().map(row_to_session))
-    }
-
-    async fn pin_hash(&self, code: &str) -> Result<Option<String>, RepoError> {
-        let row = sqlx::query("SELECT pin_hash FROM sessions WHERE code = $1")
-            .bind(code)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(storage)?;
-        Ok(row.and_then(|r| r.get::<Option<String>, _>("pin_hash")))
     }
 
     async fn set_description(&self, code: &str, description: &str) -> Result<(), RepoError> {
@@ -164,15 +152,14 @@ mod tests {
         let repo = repo().await;
         let code = fresh_code();
         let now = Utc::now();
-        let s = repo.create(code.as_str(), "demo", None, now).await.unwrap();
+        let s = repo.create(code.as_str(), "demo", now).await.unwrap();
         assert_eq!(s.description, "demo");
-        assert!(!s.has_pin);
         assert_eq!(
             repo.get(code.as_str()).await.unwrap().unwrap().code,
             code.as_str()
         );
         assert!(matches!(
-            repo.create(code.as_str(), "again", None, now).await,
+            repo.create(code.as_str(), "again", now).await,
             Err(RepoError::CodeTaken)
         ));
         repo.delete(code.as_str()).await.unwrap();
@@ -180,18 +167,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pin_hash_roundtrip_and_description_update() {
+    async fn description_update() {
         let repo = repo().await;
         let code = fresh_code();
-        let s = repo
-            .create(code.as_str(), "", Some("hash"), Utc::now())
-            .await
-            .unwrap();
-        assert!(s.has_pin);
-        assert_eq!(
-            repo.pin_hash(code.as_str()).await.unwrap().as_deref(),
-            Some("hash")
-        );
+        repo.create(code.as_str(), "", Utc::now()).await.unwrap();
         repo.set_description(code.as_str(), "new text")
             .await
             .unwrap();
@@ -211,7 +190,7 @@ mod tests {
         let repo = repo().await;
         let code = fresh_code();
         let t0 = Utc::now() - Duration::hours(1);
-        repo.create(code.as_str(), "", None, t0).await.unwrap();
+        repo.create(code.as_str(), "", t0).await.unwrap();
         // Within the throttle window: no write.
         assert!(!repo
             .touch(code.as_str(), t0 + Duration::seconds(10), 60)
@@ -230,10 +209,10 @@ mod tests {
         let repo = repo().await;
         let (old, recent) = (fresh_code(), fresh_code());
         let now = Utc::now();
-        repo.create(old.as_str(), "", None, now - Duration::days(9))
+        repo.create(old.as_str(), "", now - Duration::days(9))
             .await
             .unwrap();
-        repo.create(recent.as_str(), "", None, now - Duration::days(1))
+        repo.create(recent.as_str(), "", now - Duration::days(1))
             .await
             .unwrap();
         let idle = repo.idle_before(now - Duration::days(7)).await.unwrap();

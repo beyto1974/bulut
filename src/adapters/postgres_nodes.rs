@@ -485,7 +485,7 @@ mod tests {
         let sessions = PgSessionRepo::new(pool.clone());
         let code: ShortCode = RandomCodeGenerator::new(8).generate();
         sessions
-            .create(code.as_str(), "", None, Utc::now())
+            .create(code.as_str(), "", Utc::now())
             .await
             .unwrap();
         (PgNodeRepo::new(pool), sessions, code.as_str().to_string())
