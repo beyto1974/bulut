@@ -30,7 +30,7 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 bytes = "1"
 futures-util = "0.3"
-tower-http = { version = "0.6", features = ["cors", "trace", "set-header"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "set-header"] }
 aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "behavior-version-latest"] }
 qrcode = { version = "0.14", default-features = false }
 aws-smithy-http-client = { version = "1", default-features = false, features = ["rustls-aws-lc"] }
