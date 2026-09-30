@@ -1,7 +1,7 @@
 //! Endpoints for LLM agents: text indexes, the OpenAPI description and MCP.
 
 use axum::extract::{Path, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use bytes::Bytes;
@@ -58,7 +58,44 @@ pub async fn openapi(State(state): State<AppState>) -> Response {
     ([(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
-pub async fn mcp_post(State(state): State<AppState>, body: Bytes) -> ApiResult<Response> {
+/// `scheme://host[:port]` of a URL, the form a browser puts in the `Origin` header.
+pub fn origin_of(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, rest)) => format!(
+            "{}://{}",
+            scheme.to_ascii_lowercase(),
+            rest.split('/').next().unwrap_or("").to_ascii_lowercase()
+        ),
+        None => url.to_ascii_lowercase(),
+    }
+}
+
+pub async fn mcp_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Response> {
+    // A page on another site can send a POST with a simple content type and no preflight, and the
+    // browser attaches cached basic-auth credentials. Requiring JSON makes it a preflighted request,
+    // and a browser request from another origin is refused outright. Agents do not send `Origin`.
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("application/json")
+        });
+    if !is_json {
+        let err = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "content type must be application/json" } });
+        return Ok((StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(err)).into_response());
+    }
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if origin.to_ascii_lowercase() != origin_of(&state.config.base_url) {
+            let err = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": "origin not allowed" } });
+            return Ok((StatusCode::FORBIDDEN, Json(err)).into_response());
+        }
+    }
     let parsed: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {

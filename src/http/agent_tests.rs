@@ -190,7 +190,14 @@ async fn mcp_handshake_and_errors() {
     let (_, reply) = rpc(&app, json!({ "jsonrpc": "2.0", "id": 4, "method": "ping" })).await;
     assert_eq!(reply["result"], json!({}));
 
-    let (status, _, b) = raw(&app, Method::POST, "/mcp", &[], b"{not json").await;
+    let (status, _, b) = raw(
+        &app,
+        Method::POST,
+        "/mcp",
+        &[("content-type", "application/json")],
+        b"{not json",
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(json_of(&b)["error"]["code"], -32700);
 
@@ -376,4 +383,58 @@ async fn mcp_refuses_binary_files() {
     let (is_err, text) = tool_text(&r);
     assert!(is_err && text.contains("not a text file"), "{text}");
     raw(&app, Method::DELETE, &format!("/api/s/{code}"), &[], b"").await;
+}
+
+#[tokio::test]
+async fn mcp_refuses_simple_cross_site_requests() {
+    let (app, _f) = app().await;
+    let ping: &'static [u8] = br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    // No content type (what a no-cors fetch sends) and text/plain (a simple form post) are refused.
+    for headers in [
+        vec![],
+        vec![("content-type", "text/plain")],
+        vec![("content-type", "application/x-www-form-urlencoded")],
+    ] {
+        let (status, _, _) = raw(&app, Method::POST, "/mcp", &headers, ping).await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{headers:?}");
+    }
+    // A browser request from another site is refused even with the right content type.
+    let json_type = ("content-type", "application/json");
+    let (status, _, _) = raw(
+        &app,
+        Method::POST,
+        "/mcp",
+        &[json_type, ("origin", "https://evil.example")],
+        ping,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // The app's own origin, agents (no Origin) and a charset parameter are fine.
+    let own = ("origin", "http://localhost:8080");
+    assert_eq!(
+        raw(&app, Method::POST, "/mcp", &[json_type, own], ping)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        raw(&app, Method::POST, "/mcp", &[json_type], ping).await.0,
+        StatusCode::OK
+    );
+    let utf8 = ("content-type", "application/json; charset=utf-8");
+    assert_eq!(
+        raw(&app, Method::POST, "/mcp", &[utf8], ping).await.0,
+        StatusCode::OK
+    );
+}
+
+#[test]
+fn origin_is_scheme_host_and_port() {
+    use super::agent::origin_of;
+    assert_eq!(
+        origin_of("https://Bulut.Example.com/some/path"),
+        "https://bulut.example.com"
+    );
+    assert_eq!(origin_of("http://localhost:3032"), "http://localhost:3032");
+    assert_eq!(origin_of("http://localhost:3032/"), "http://localhost:3032");
 }

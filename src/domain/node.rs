@@ -78,7 +78,10 @@ pub fn validate_name(name: &str) -> Result<&str, &'static str> {
     if name.len() > 255 {
         return Err("name is longer than 255 bytes");
     }
-    if name.contains('/') || name.chars().any(|c| c.is_control()) || name == "." || name == ".." {
+    // Control characters and the Unicode line and paragraph separators, which readers of a text listing
+    // may treat as a line break.
+    let breaks = |c: char| c.is_control() || c == '\u{2028}' || c == '\u{2029}';
+    if name.contains('/') || name.chars().any(breaks) || name == "." || name == ".." {
         return Err("name contains a character that is not allowed");
     }
     Ok(name)
@@ -111,6 +114,8 @@ mod tests {
         assert!(validate_name("a/b").is_err());
         assert!(validate_name("..").is_err());
         assert!(validate_name("bad\nname").is_err());
+        assert!(validate_name("line\u{2028}break").is_err());
+        assert!(validate_name("para\u{2029}graph").is_err());
         assert!(validate_name(&"x".repeat(256)).is_err());
     }
 
