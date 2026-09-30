@@ -92,45 +92,21 @@ async fn check_parent(
     }
 }
 
-#[async_trait]
-impl NodeRepo for PgNodeRepo {
-    async fn create_folder(
-        &self,
-        session: &str,
-        parent: Option<Uuid>,
-        name: &str,
-        now: DateTime<Utc>,
-    ) -> Result<Node, RepoError> {
-        let mut tx = self.pool.begin().await.map_err(storage)?;
-        check_parent(&mut tx, session, parent).await?;
-        let res = sqlx::query(&format!(
-            "INSERT INTO nodes (id, session_code, parent_id, kind, name, created_at)
-             VALUES ($1, $2, $3, 'folder', $4, $5) RETURNING {NODE_COLS}"
-        ))
-        .bind(Uuid::new_v4())
-        .bind(session)
-        .bind(parent)
-        .bind(name)
-        .bind(now)
-        .fetch_one(&mut *tx)
-        .await;
-        let row = match res {
-            Ok(r) => r,
-            Err(e) if is_unique(&e) => return Err(RepoError::NameTaken),
-            Err(e) => return Err(storage(e)),
-        };
-        tx.commit().await.map_err(storage)?;
-        Ok(node_from(&row))
-    }
+/// Result of one try at adding a version.
+enum Attempt {
+    Done((Node, FileVersion)),
+    LostRace,
+}
 
-    async fn add_version(
+impl PgNodeRepo {
+    async fn try_add_version(
         &self,
         session: &str,
         parent: Option<Uuid>,
         name: &str,
-        new: NewVersion,
+        new: &NewVersion,
         now: DateTime<Utc>,
-    ) -> Result<(Node, FileVersion), RepoError> {
+    ) -> Result<Attempt, RepoError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
         check_parent(&mut tx, session, parent).await?;
 
@@ -155,7 +131,7 @@ impl NodeRepo for PgNodeRepo {
                 node
             }
             None => {
-                let row = sqlx::query(&format!(
+                let inserted = sqlx::query(&format!(
                     "INSERT INTO nodes (id, session_code, parent_id, kind, name, created_at)
                      VALUES ($1, $2, $3, 'file', $4, $5) RETURNING {NODE_COLS}"
                 ))
@@ -165,15 +141,14 @@ impl NodeRepo for PgNodeRepo {
                 .bind(name)
                 .bind(now)
                 .fetch_one(&mut *tx)
-                .await
-                .map_err(|e| {
-                    if is_unique(&e) {
-                        RepoError::NameTaken
-                    } else {
-                        storage(e)
-                    }
-                })?;
-                node_from(&row)
+                .await;
+                match inserted {
+                    Ok(row) => node_from(&row),
+                    // Someone else created the name between our lookup and insert. Dropping the
+                    // transaction rolls it back, the caller retries.
+                    Err(e) if is_unique(&e) => return Ok(Attempt::LostRace),
+                    Err(e) => return Err(storage(e)),
+                }
             }
         };
 
@@ -215,7 +190,63 @@ impl NodeRepo for PgNodeRepo {
             .await
             .map_err(storage)?;
         tx.commit().await.map_err(storage)?;
-        Ok((node, version_from(&row)))
+        Ok(Attempt::Done((node, version_from(&row))))
+    }
+}
+
+#[async_trait]
+impl NodeRepo for PgNodeRepo {
+    async fn create_folder(
+        &self,
+        session: &str,
+        parent: Option<Uuid>,
+        name: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Node, RepoError> {
+        let mut tx = self.pool.begin().await.map_err(storage)?;
+        check_parent(&mut tx, session, parent).await?;
+        let res = sqlx::query(&format!(
+            "INSERT INTO nodes (id, session_code, parent_id, kind, name, created_at)
+             VALUES ($1, $2, $3, 'folder', $4, $5) RETURNING {NODE_COLS}"
+        ))
+        .bind(Uuid::new_v4())
+        .bind(session)
+        .bind(parent)
+        .bind(name)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await;
+        let row = match res {
+            Ok(r) => r,
+            Err(e) if is_unique(&e) => return Err(RepoError::NameTaken),
+            Err(e) => return Err(storage(e)),
+        };
+        tx.commit().await.map_err(storage)?;
+        Ok(node_from(&row))
+    }
+
+    async fn add_version(
+        &self,
+        session: &str,
+        parent: Option<Uuid>,
+        name: &str,
+        new: NewVersion,
+        now: DateTime<Utc>,
+    ) -> Result<(Node, FileVersion), RepoError> {
+        // Two uploads of a new name can both find no file and both try to create it. The loser
+        // rolls back and tries again, and then finds the file the winner made.
+        for _ in 0..5 {
+            match self
+                .try_add_version(session, parent, name, &new, now)
+                .await?
+            {
+                Attempt::Done(pair) => return Ok(pair),
+                Attempt::LostRace => continue,
+            }
+        }
+        Err(RepoError::Storage(
+            "too many uploads of the same name at once".into(),
+        ))
     }
 
     async fn get(&self, session: &str, id: Uuid) -> Result<Option<Node>, RepoError> {
@@ -613,6 +644,31 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        sessions.delete(&s).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_uploads_of_one_name_all_become_versions() {
+        let (repo, sessions, s) = setup().await;
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let (repo, s) = (repo.clone(), s.clone());
+            handles.push(tokio::spawn(async move {
+                repo.add_version(&s, None, "race.bin", nv(&format!("k{i}"), i), Utc::now())
+                    .await
+            }));
+        }
+        let mut versions = Vec::new();
+        for h in handles {
+            versions.push(h.await.unwrap().expect("no upload may fail").1.version);
+        }
+        versions.sort();
+        assert_eq!(versions, (1..=8).collect::<Vec<_>>());
+        let list = repo.list(&s, None).await.unwrap();
+        assert_eq!(list.len(), 1, "one file, not one per upload");
+        assert_eq!(list[0].version_count, 8);
+        let all = repo.versions(&s, list[0].node.id).await.unwrap();
+        assert_eq!(all.iter().filter(|v| v.is_latest).count(), 1);
         sessions.delete(&s).await.unwrap();
     }
 
