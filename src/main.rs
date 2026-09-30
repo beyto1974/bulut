@@ -44,7 +44,10 @@ async fn main() {
         });
     tracing::info!(%addr, env = config.app_env.as_str(), version = VERSION, "bulut started");
 
-    let app = http::router(http::AppState { config, version: VERSION });
+    let app = http::router(http::AppState {
+        config,
+        version: VERSION,
+    });
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

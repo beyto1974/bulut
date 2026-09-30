@@ -95,7 +95,8 @@ impl Config {
             // S3 multipart parts (except the last) must be at least 5 MiB.
             return Err(ConfigError::Invalid("CHUNK_SIZE", chunk_size.to_string()));
         }
-        let session_idle_ttl_days: u32 = num("SESSION_IDLE_TTL_DAYS", get("SESSION_IDLE_TTL_DAYS"), 7)?;
+        let session_idle_ttl_days: u32 =
+            num("SESSION_IDLE_TTL_DAYS", get("SESSION_IDLE_TTL_DAYS"), 7)?;
         if session_idle_ttl_days == 0 {
             return Err(ConfigError::Invalid("SESSION_IDLE_TTL_DAYS", "0".into()));
         }
@@ -119,7 +120,10 @@ mod tests {
     use super::*;
 
     fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
