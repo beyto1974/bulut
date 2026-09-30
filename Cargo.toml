@@ -23,7 +23,7 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 rand = "0.8"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "chrono", "uuid"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "chrono", "uuid"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
 thiserror = "2"
