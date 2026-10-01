@@ -10,6 +10,7 @@ use crate::domain::upload::{Upload, UploadStatus};
 use crate::ports::blob_store::{BlobError, BlobStore, PartInfo};
 use crate::ports::clock::Clock;
 use crate::ports::node_repo::{NewVersion, NodeRepo};
+use crate::ports::session_repo::RepoError;
 use crate::ports::upload_repo::UploadRepo;
 use crate::services::error::ServiceError;
 
@@ -211,13 +212,31 @@ impl UploadService {
     /// Which parts are stored, so a client can resume after a dropped connection.
     pub async fn status_of(&self, session: &str, id: Uuid) -> Result<UploadStatus, ServiceError> {
         let u = self.load(session, id).await?;
-        let received = self
-            .received_parts(&u)
-            .await?
-            .into_iter()
-            .map(|p| p.number)
-            .collect();
+        let received = if self.assembled(&u).await? {
+            // The parts were joined into the object already: every one of them was received.
+            (1..=u.parts_total()).collect()
+        } else {
+            self.received_parts(&u)
+                .await?
+                .into_iter()
+                .map(|p| p.number)
+                .collect()
+        };
         Ok(self.status(&u, received))
+    }
+
+    /// Whether the object store already holds the finished file. That is the state of an upload
+    /// whose `complete` joined the parts but could not record the version, so a retry must not
+    /// try to join them again. An empty file has no parts and is simply stored again.
+    async fn assembled(&self, u: &Upload) -> Result<bool, ServiceError> {
+        if u.size == 0 {
+            return Ok(false);
+        }
+        match self.blobs.read(&u.blob_key, Some((0, 0))).await {
+            Ok(object) => Ok(object.total == u.size as u64),
+            Err(BlobError::NotFound) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn received_parts(&self, u: &Upload) -> Result<Vec<PartInfo>, ServiceError> {
@@ -272,7 +291,7 @@ impl UploadService {
             self.blobs
                 .put(&u.blob_key, Bytes::new(), &u.content_type)
                 .await?;
-        } else {
+        } else if !self.assembled(&u).await? {
             let parts = self.received_parts(&u).await?;
             let total = u.parts_total();
             let missing: Vec<i32> = (1..=total)
@@ -311,8 +330,12 @@ impl UploadService {
                 self.uploads.delete(u.id).await?;
                 Ok(pair)
             }
+            // The database failed, not the request: keep the upload and the finished object so
+            // the client can call `complete` again instead of sending the file a second time.
+            Err(e @ RepoError::Storage(_)) => Err(e.into()),
             Err(e) => {
-                // The stored object has no row pointing to it, so remove it.
+                // Nothing a retry can fix (a limit, a name), and the stored object has no row
+                // pointing to it, so remove it.
                 let _ = self
                     .blobs
                     .delete_many(std::slice::from_ref(&u.blob_key))
@@ -339,6 +362,11 @@ impl UploadService {
                 tracing::warn!(upload = %u.id, error = %e, "could not abort multipart upload");
             }
         }
+        // A `complete` that could not record its version leaves the joined object behind.
+        let _ = self
+            .blobs
+            .delete_many(std::slice::from_ref(&u.blob_key))
+            .await;
         let _ = self.uploads.delete(u.id).await;
     }
 

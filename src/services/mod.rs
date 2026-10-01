@@ -4,6 +4,8 @@ pub mod tree_service;
 pub mod upload_service;
 
 #[cfg(test)]
+mod complete_retry_tests;
+#[cfg(test)]
 mod folder_flag_tests;
 #[cfg(test)]
 pub(crate) mod limit_tests;
