@@ -12,9 +12,11 @@ use uuid::Uuid;
 
 use crate::adapters::postgres_nodes::PgNodeRepo;
 use crate::domain::node::{FileVersion, Node, NodeEntry};
+use crate::domain::upload::Upload;
 use crate::ports::blob_store::BlobStore;
 use crate::ports::node_repo::{NewVersion, NodePatch, NodeRepo};
 use crate::ports::session_repo::RepoError;
+use crate::ports::upload_repo::UploadRepo;
 use crate::services::error::ServiceError;
 use crate::services::tests::{fixture, Fixture};
 use crate::services::upload_service::{NewUpload, UploadService};
@@ -278,5 +280,95 @@ async fn an_abandoned_retry_is_cleaned_up_with_its_object() {
         .await
         .unwrap()
         .is_empty());
+    f.sessions.delete(&s.code).await.unwrap();
+}
+
+/// The real upload repository, except that `delete` can be made to fail.
+struct FlakyUploads {
+    inner: Arc<dyn UploadRepo>,
+    fail_delete: Mutex<bool>,
+}
+
+#[async_trait]
+impl UploadRepo for FlakyUploads {
+    async fn create(&self, upload: &Upload) -> Result<(), RepoError> {
+        self.inner.create(upload).await
+    }
+
+    async fn get(&self, session: &str, id: Uuid) -> Result<Option<Upload>, RepoError> {
+        self.inner.get(session, id).await
+    }
+
+    async fn delete(&self, id: Uuid) -> Result<(), RepoError> {
+        if *self.fail_delete.lock().unwrap() {
+            return Err(RepoError::Storage("connection reset".into()));
+        }
+        self.inner.delete(id).await
+    }
+
+    async fn for_session(&self, session: &str) -> Result<Vec<Upload>, RepoError> {
+        self.inner.for_session(session).await
+    }
+
+    async fn known_keys(&self, keys: &[String]) -> Result<HashSet<String>, RepoError> {
+        self.inner.known_keys(keys).await
+    }
+
+    async fn started_before(&self, cutoff: DateTime<Utc>) -> Result<Vec<Upload>, RepoError> {
+        self.inner.started_before(cutoff).await
+    }
+}
+
+#[tokio::test]
+async fn a_row_that_outlives_its_finished_upload_never_takes_the_file_with_it() {
+    let f = fixture().await;
+    let flaky_rows = Arc::new(FlakyUploads {
+        inner: f.uploads.uploads.clone(),
+        fail_delete: Mutex::new(true),
+    });
+    let svc = UploadService {
+        folders_enabled: true,
+        uploads: flaky_rows.clone(),
+        nodes: f.nodes.clone(),
+        blobs: f.blobs.clone(),
+        clock: f.clock.clone(),
+        part_size: 10,
+        max_file_bytes: 1000,
+        max_files: 1000,
+        max_pending: 1000,
+        max_tags: 1000,
+    };
+    let s = f.sessions.create("").await.unwrap();
+    let st = svc.init(&s.code, new_upload("a.txt", 3)).await.unwrap();
+    svc.put_part(&s.code, st.upload_id, 1, Bytes::from_static(b"abc"))
+        .await
+        .unwrap();
+
+    // The version is recorded; only the bookkeeping row could not be removed. The client has what
+    // it asked for, so this is a success.
+    let (_, version) = svc.complete(&s.code, st.upload_id).await.unwrap();
+    assert_eq!(read_all(&f, &version.blob_key).await, b"abc");
+
+    // The leftover row, aborted by the client or swept as stale, must not delete a live file.
+    svc.abort(&s.code, st.upload_id).await.unwrap();
+    f.clock.advance(chrono::Duration::hours(25));
+    svc.cleanup_stale(chrono::Duration::hours(24))
+        .await
+        .unwrap();
+    assert_eq!(read_all(&f, &version.blob_key).await, b"abc");
+
+    // Once the database is back, the stale row goes and the file is still there.
+    *flaky_rows.fail_delete.lock().unwrap() = false;
+    svc.cleanup_stale(chrono::Duration::hours(24))
+        .await
+        .unwrap();
+    assert!(f
+        .uploads
+        .uploads
+        .for_session(&s.code)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(read_all(&f, &version.blob_key).await, b"abc");
     f.sessions.delete(&s.code).await.unwrap();
 }

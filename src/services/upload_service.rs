@@ -327,7 +327,12 @@ impl UploadService {
             .await;
         match added {
             Ok(pair) => {
-                self.uploads.delete(u.id).await?;
+                // The file is recorded, which is what the client asked for. A row that cannot be
+                // removed now is bookkeeping: the stale-upload sweep removes it later, and
+                // `discard` leaves the object alone because a version points to it.
+                if let Err(e) = self.uploads.delete(u.id).await {
+                    tracing::warn!(upload = %u.id, error = %e, "could not remove a finished upload row");
+                }
                 Ok(pair)
             }
             // The database failed, not the request: keep the upload and the finished object so
@@ -362,11 +367,20 @@ impl UploadService {
                 tracing::warn!(upload = %u.id, error = %e, "could not abort multipart upload");
             }
         }
-        // A `complete` that could not record its version leaves the joined object behind.
-        let _ = self
-            .blobs
-            .delete_many(std::slice::from_ref(&u.blob_key))
-            .await;
+        // A `complete` that could not record its version leaves the joined object behind. But if a
+        // version does point to it (the row outlived a successful `complete`), it is a live file.
+        // When that cannot be told, keep the object: the orphan sweep takes it later if needed.
+        let referenced = self
+            .nodes
+            .known_keys(std::slice::from_ref(&u.blob_key))
+            .await
+            .map_or(true, |known| !known.is_empty());
+        if !referenced {
+            let _ = self
+                .blobs
+                .delete_many(std::slice::from_ref(&u.blob_key))
+                .await;
+        }
         let _ = self.uploads.delete(u.id).await;
     }
 
