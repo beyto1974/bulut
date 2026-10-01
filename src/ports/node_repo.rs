@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -61,6 +63,14 @@ pub trait NodeRepo: Send + Sync {
 
     /// Newest first.
     async fn versions(&self, session: &str, node_id: Uuid) -> Result<Vec<FileVersion>, RepoError>;
+
+    /// Versions of several files in one query, newest first per file. Nodes that are not in
+    /// `session` are left out; a file without versions has no entry.
+    async fn versions_of(
+        &self,
+        session: &str,
+        node_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<FileVersion>>, RepoError>;
 
     async fn version(
         &self,

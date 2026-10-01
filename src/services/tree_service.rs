@@ -70,7 +70,18 @@ impl TreeService {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), ServiceError>> + Send + 'a>>
     {
         Box::pin(async move {
-            for entry in self.nodes.list(session, parent).await? {
+            let entries = self.nodes.list(session, parent).await?;
+            // One query for the versions of every file that still fits under the limit, instead
+            // of one per file.
+            let room = limit.saturating_sub(walk.items.len());
+            let file_ids: Vec<Uuid> = entries
+                .iter()
+                .take(room)
+                .filter(|e| e.node.kind != NodeKind::Folder)
+                .map(|e| e.node.id)
+                .collect();
+            let mut versions_by_file = self.nodes.versions_of(session, &file_ids).await?;
+            for entry in entries {
                 if walk.items.len() >= limit {
                     walk.truncated = true;
                     return Ok(());
@@ -80,7 +91,7 @@ impl TreeService {
                 let versions = if is_folder {
                     Vec::new()
                 } else {
-                    self.nodes.versions(session, entry.node.id).await?
+                    versions_by_file.remove(&entry.node.id).unwrap_or_default()
                 };
                 let id = entry.node.id;
                 walk.items.push(WalkItem {

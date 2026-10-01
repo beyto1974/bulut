@@ -13,3 +13,5 @@ mod quota_tests;
 pub(crate) mod tests;
 #[cfg(test)]
 mod upload_tests;
+#[cfg(test)]
+mod walk_tests;
