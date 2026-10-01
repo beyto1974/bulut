@@ -8,7 +8,7 @@ use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectI
 use aws_sdk_s3::Client;
 use bytes::Bytes;
 
-use crate::ports::blob_store::{BlobError, BlobRead, BlobStore, PartInfo};
+use crate::ports::blob_store::{BlobError, BlobMeta, BlobRead, BlobStore, PartInfo};
 use crate::storage_config::StorageConfig;
 
 pub struct S3BlobStore {
@@ -273,6 +273,29 @@ impl BlobStore for S3BlobStore {
         })
     }
 
+    async fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<BlobMeta>, BlobError> {
+        let mut request = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            // S3 answers at most 1000 keys per request.
+            .max_keys(limit.clamp(1, 1000) as i32);
+        if let Some(after) = after {
+            request = request.start_after(after);
+        }
+        let out = request.send().await.map_err(storage)?;
+        Ok(out
+            .contents()
+            .iter()
+            .filter_map(|o| {
+                let key = o.key()?.to_string();
+                let t = o.last_modified()?;
+                let modified = chrono::DateTime::from_timestamp(t.secs(), t.subsec_nanos())?;
+                Some(BlobMeta { key, modified })
+            })
+            .collect())
+    }
+
     async fn delete_many(&self, keys: &[String]) -> Result<(), BlobError> {
         for chunk in keys.chunks(1000) {
             let objects = chunk
@@ -406,6 +429,37 @@ mod tests {
             "nothing is left in the bucket"
         );
         // Deleting again, or deleting keys that never existed, is not an error.
+        s.delete_many(&keys).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_pages_after_a_key_with_modification_times() {
+        let s = store().await;
+        let prefix = format!("test-list/{}/", uuid::Uuid::new_v4());
+        let keys: Vec<String> = ["a", "b", "c"]
+            .iter()
+            .map(|n| format!("{prefix}{n}"))
+            .collect();
+        for k in &keys {
+            s.put(k, Bytes::from_static(b"x"), "text/plain")
+                .await
+                .unwrap();
+        }
+
+        // Start right before the first key, two at a time.
+        let first = s.list(Some(&prefix), 2).await.unwrap();
+        assert_eq!(
+            first.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(),
+            [keys[0].as_str(), keys[1].as_str()]
+        );
+        let next = s.list(Some(&first[1].key), 2).await.unwrap();
+        assert_eq!(next[0].key, keys[2]);
+        let age = chrono::Utc::now() - next[0].modified;
+        assert!(
+            age.num_minutes().abs() < 10,
+            "modified time is recent: {age}"
+        );
+
         s.delete_many(&keys).await.unwrap();
     }
 

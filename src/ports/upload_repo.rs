@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -15,6 +17,9 @@ pub trait UploadRepo: Send + Sync {
 
     /// Uploads of one session, used to abort them when the session is purged.
     async fn for_session(&self, session: &str) -> Result<Vec<Upload>, RepoError>;
+
+    /// Which of `keys` an unfinished upload will become.
+    async fn known_keys(&self, keys: &[String]) -> Result<HashSet<String>, RepoError>;
 
     /// Uploads started at or before `cutoff` that never finished.
     async fn started_before(&self, cutoff: DateTime<Utc>) -> Result<Vec<Upload>, RepoError>;

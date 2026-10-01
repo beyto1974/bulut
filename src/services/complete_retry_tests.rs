@@ -1,7 +1,7 @@
 //! A database failure right after the object store assembled the file must not cost the client the
 //! upload: the row stays, and `complete` can be called again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -20,9 +20,9 @@ use crate::services::tests::{fixture, Fixture};
 use crate::services::upload_service::{NewUpload, UploadService};
 
 /// The real repository, except that `add_version` fails once with the error it is given.
-struct FlakyNodes {
+pub(crate) struct FlakyNodes {
     inner: Arc<PgNodeRepo>,
-    fail_next_add: Mutex<Option<RepoError>>,
+    pub(crate) fail_next_add: Mutex<Option<RepoError>>,
 }
 
 #[async_trait]
@@ -125,12 +125,16 @@ impl NodeRepo for FlakyNodes {
         self.inner.count_files(session).await
     }
 
+    async fn known_keys(&self, keys: &[String]) -> Result<HashSet<String>, RepoError> {
+        self.inner.known_keys(keys).await
+    }
+
     async fn set_thumb_key(&self, version_id: Uuid, key: &str) -> Result<(), RepoError> {
         self.inner.set_thumb_key(version_id, key).await
     }
 }
 
-fn flaky_uploads(f: &Fixture) -> (UploadService, Arc<FlakyNodes>) {
+pub(crate) fn flaky_uploads(f: &Fixture) -> (UploadService, Arc<FlakyNodes>) {
     let flaky = Arc::new(FlakyNodes {
         inner: f.nodes.clone(),
         fail_next_add: Mutex::new(None),
@@ -150,7 +154,7 @@ fn flaky_uploads(f: &Fixture) -> (UploadService, Arc<FlakyNodes>) {
     (svc, flaky)
 }
 
-fn new_upload(name: &str, size: i64) -> NewUpload {
+pub(crate) fn new_upload(name: &str, size: i64) -> NewUpload {
     NewUpload {
         parent: None,
         name: name.into(),

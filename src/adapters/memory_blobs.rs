@@ -1,16 +1,21 @@
 //! In-memory object storage for tests and local experiments.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 
-use crate::ports::blob_store::{BlobError, BlobRead, BlobStore, PartInfo};
+use crate::ports::blob_store::{BlobError, BlobMeta, BlobRead, BlobStore, PartInfo};
+use crate::ports::clock::Clock;
 
 #[derive(Default)]
 struct Inner {
     objects: HashMap<String, Bytes>,
+    /// When each object was stored, by the store's clock.
+    modified: HashMap<String, DateTime<Utc>>,
+    clock: Option<Arc<dyn Clock>>,
     uploads: HashMap<(String, String), BTreeMap<i32, Bytes>>,
     next_id: u64,
 }
@@ -23,6 +28,13 @@ impl MemoryBlobStore {
         Self::default()
     }
 
+    /// A store that stamps objects with `clock` instead of the system time, so a test can age them.
+    pub fn with_clock(clock: Arc<dyn Clock>) -> Self {
+        let store = Self::default();
+        store.0.lock().unwrap().clock = Some(clock);
+        store
+    }
+
     pub fn keys(&self) -> Vec<String> {
         let mut k: Vec<_> = self.0.lock().unwrap().objects.keys().cloned().collect();
         k.sort();
@@ -31,6 +43,14 @@ impl MemoryBlobStore {
 
     pub fn open_uploads(&self) -> usize {
         self.0.lock().unwrap().uploads.len()
+    }
+}
+
+impl Inner {
+    fn store(&mut self, key: &str, data: Bytes) {
+        let now = self.clock.as_ref().map_or_else(Utc::now, |c| c.now());
+        self.modified.insert(key.to_string(), now);
+        self.objects.insert(key.to_string(), data);
     }
 }
 
@@ -94,7 +114,7 @@ impl BlobStore for MemoryBlobStore {
             out.extend_from_slice(stored.get(&p.number).ok_or(BlobError::NotFound)?);
         }
         let size = out.len() as u64;
-        g.objects.insert(key.to_string(), Bytes::from(out));
+        g.store(key, Bytes::from(out));
         Ok(size)
     }
 
@@ -108,7 +128,7 @@ impl BlobStore for MemoryBlobStore {
     }
 
     async fn put(&self, key: &str, data: Bytes, _content_type: &str) -> Result<(), BlobError> {
-        self.0.lock().unwrap().objects.insert(key.to_string(), data);
+        self.0.lock().unwrap().store(key, data);
         Ok(())
     }
 
@@ -142,10 +162,29 @@ impl BlobStore for MemoryBlobStore {
         })
     }
 
+    async fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<BlobMeta>, BlobError> {
+        let g = self.0.lock().unwrap();
+        let mut keys: Vec<&String> = g
+            .objects
+            .keys()
+            .filter(|k| after.map_or(true, |a| k.as_str() > a))
+            .collect();
+        keys.sort();
+        Ok(keys
+            .into_iter()
+            .take(limit)
+            .map(|k| BlobMeta {
+                key: k.clone(),
+                modified: g.modified[k],
+            })
+            .collect())
+    }
+
     async fn delete_many(&self, keys: &[String]) -> Result<(), BlobError> {
         let mut g = self.0.lock().unwrap();
         for k in keys {
             g.objects.remove(k);
+            g.modified.remove(k);
         }
         Ok(())
     }
@@ -208,6 +247,34 @@ mod tests {
             store.read("missing", None).await,
             Err(BlobError::NotFound)
         ));
+    }
+
+    #[tokio::test]
+    async fn list_pages_in_key_order_with_the_clock_of_the_store() {
+        let clock = Arc::new(crate::ports::clock::ManualClock::new(Utc::now()));
+        let s = MemoryBlobStore::with_clock(clock.clone());
+        let t0 = clock.now();
+        for k in ["c", "a"] {
+            s.put(k, Bytes::from_static(b"x"), "text/plain")
+                .await
+                .unwrap();
+        }
+        clock.advance(chrono::Duration::hours(1));
+        s.put("b", Bytes::from_static(b"x"), "text/plain")
+            .await
+            .unwrap();
+
+        let first = s.list(None, 2).await.unwrap();
+        assert_eq!(
+            first.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(first[0].modified, t0);
+        assert_eq!(first[1].modified, t0 + chrono::Duration::hours(1));
+        let rest = s.list(Some("b"), 2).await.unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].key, "c");
+        assert!(s.list(Some("c"), 2).await.unwrap().is_empty());
     }
 
     #[tokio::test]

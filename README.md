@@ -106,7 +106,8 @@ The container answers `GET /healthz` and has a built-in health check.
 | `MAX_FILE_BYTES` | `1073741824` | Largest file, 1 GiB. |
 | `CHUNK_SIZE` | `8388608` | Upload part size, at least 5 MiB. The file limit must fit in 10000 parts. |
 | `SESSION_IDLE_TTL_DAYS` | `7` | Days without activity before a session and its files are deleted. |
-| `SWEEP_INTERVAL_SECS` | `3600` | How often idle sessions are looked for. |
+| `SWEEP_INTERVAL_SECS` | `3600` | How often idle sessions and orphaned objects are looked for. |
+| `ORPHAN_GRACE_HOURS` | `24` | Objects in the bucket that no file refers to are deleted once they are this old. `0` turns it off. Only keys named `<session code>/...` are ever touched. |
 | `CODE_LENGTH` | `5` | Characters in a session code. |
 
 `.env.example` lists them all with comments.

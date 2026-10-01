@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -101,6 +101,9 @@ pub trait NodeRepo: Send + Sync {
 
     /// Number of files (not versions) in a session.
     async fn count_files(&self, session: &str) -> Result<i64, RepoError>;
+
+    /// Which of `keys` some file version points to, as blob or as thumbnail.
+    async fn known_keys(&self, keys: &[String]) -> Result<HashSet<String>, RepoError>;
 
     async fn set_thumb_key(&self, version_id: Uuid, key: &str) -> Result<(), RepoError>;
 }

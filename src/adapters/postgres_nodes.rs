@@ -1,6 +1,6 @@
 //! Postgres implementation of the file tree repository.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -449,6 +449,22 @@ impl NodeRepo for PgNodeRepo {
         .await
         .map_err(storage)?;
         Ok(rows.iter().map(version_from).collect())
+    }
+
+    async fn known_keys(&self, keys: &[String]) -> Result<HashSet<String>, RepoError> {
+        if keys.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let rows = sqlx::query(
+            "SELECT blob_key AS key FROM file_versions WHERE blob_key = ANY($1)
+             UNION
+             SELECT thumb_key AS key FROM file_versions WHERE thumb_key = ANY($1)",
+        )
+        .bind(keys)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage)?;
+        Ok(rows.iter().map(|r| r.get("key")).collect())
     }
 
     async fn versions_of(

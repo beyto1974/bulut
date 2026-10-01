@@ -3,12 +3,9 @@
 Ideas and known limits, roughly in order of usefulness.
 
 ## Known limits
-- `llms.txt` and the MCP `get_session` tool run one query per file (up to 1000 files). Batch the versions into one
-  query.
-- If the database fails right after the object store finished a chunked upload, `complete` discards the stored
-  file and the client has to send it again. Keep the upload row so `complete` can be retried.
-- Files of a session that is purged while an upload into it completes can stay in the bucket. A periodic
-  comparison of the bucket with the database (or a lifecycle rule) would clean them up.
+- The orphan sweep (`ORPHAN_GRACE_HOURS`) lists finished objects only. An unfinished multipart upload that has no
+  row in the database (the process died right after starting it) is not seen; a lifecycle rule on the bucket that
+  aborts incomplete multipart uploads after a day covers it.
 - There is no limit on the number of sessions. Put request rate limits and timeouts on the reverse proxy.
 
 ## Later

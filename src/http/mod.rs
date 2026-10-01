@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::Config;
+use crate::services::orphan_service::OrphanSweeper;
 use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
 use crate::services::upload_service::UploadService;
@@ -29,6 +30,8 @@ pub struct AppState {
     pub sessions: Arc<SessionService>,
     pub tree: Arc<TreeService>,
     pub uploads: Arc<UploadService>,
+    /// `None` when `ORPHAN_GRACE_HOURS=0` switches the clean-up off.
+    pub orphans: Option<Arc<OrphanSweeper>>,
 }
 
 pub fn router(state: AppState) -> Router {
