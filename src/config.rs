@@ -75,6 +75,9 @@ pub struct Config {
     pub folders_enabled: bool,
     pub session_idle_ttl_days: u32,
     pub sweep_interval_secs: u64,
+    /// Objects in the bucket that no file refers to are deleted once they are this many hours
+    /// old. `0` switches the clean-up off.
+    pub orphan_grace_hours: u32,
 }
 
 impl Config {
@@ -188,6 +191,7 @@ impl Config {
             folders_enabled,
             session_idle_ttl_days,
             sweep_interval_secs: num("SWEEP_INTERVAL_SECS", get("SWEEP_INTERVAL_SECS"), 3600)?,
+            orphan_grace_hours: num("ORPHAN_GRACE_HOURS", get("ORPHAN_GRACE_HOURS"), 24)?,
         })
     }
 }
@@ -212,6 +216,7 @@ mod tests {
         assert_eq!(c.bind_addr.to_string(), "0.0.0.0");
         assert_eq!(c.code_length, 5);
         assert_eq!(c.session_idle_ttl_days, 7);
+        assert_eq!(c.orphan_grace_hours, 24);
         assert_eq!(c.max_file_bytes, 1024 * 1024 * 1024);
         assert!(!c.folders_enabled, "folders are off by default");
         assert_eq!(c.max_files_per_session, 100);
@@ -235,6 +240,7 @@ mod tests {
             ("PORT", "9000"),
             ("BASE_URL", "https://bulut.dev/"),
             ("SESSION_IDLE_TTL_DAYS", "3"),
+            ("ORPHAN_GRACE_HOURS", "0"),
         ]))
         .unwrap();
         assert_eq!(c.app_env, AppEnv::Testing);
@@ -243,6 +249,7 @@ mod tests {
         assert_eq!(c.port, 9000);
         assert_eq!(c.base_url, "https://bulut.dev");
         assert_eq!(c.session_idle_ttl_days, 3);
+        assert_eq!(c.orphan_grace_hours, 0, "0 switches the clean-up off");
     }
 
     #[test]
@@ -262,6 +269,7 @@ mod tests {
         assert!(Config::from_map(&vars(&[("SESSION_IDLE_TTL_DAYS", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("FOLDERS_ENABLED", "maybe")])).is_err());
+        assert!(Config::from_map(&vars(&[("ORPHAN_GRACE_HOURS", "-1")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILES_PER_SESSION", "0")])).is_err());
         for key in [
             "MAX_VERSIONS_PER_FILE",

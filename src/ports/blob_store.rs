@@ -4,6 +4,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::{DateTime, Utc};
 use futures_util::Stream;
 
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +22,13 @@ pub struct PartInfo {
     pub number: i32,
     pub size: u64,
     pub etag: String,
+}
+
+/// An object as a listing shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobMeta {
+    pub key: String,
+    pub modified: DateTime<Utc>,
 }
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
@@ -63,6 +71,10 @@ pub trait BlobStore: Send + Sync {
 
     /// `range` is an inclusive `(start, end)`; `end` is clamped to the object size.
     async fn read(&self, key: &str, range: Option<(u64, u64)>) -> Result<BlobRead, BlobError>;
+
+    /// Up to `limit` objects in key order, starting after the key `after` (or at the first key).
+    /// Objects only: unfinished multipart uploads are not listed.
+    async fn list(&self, after: Option<&str>, limit: usize) -> Result<Vec<BlobMeta>, BlobError>;
 
     /// Deleting a missing key is not an error.
     async fn delete_many(&self, keys: &[String]) -> Result<(), BlobError>;

@@ -1,5 +1,7 @@
 //! Postgres implementation of the file tree repository.
 
+use std::collections::{HashMap, HashSet};
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
@@ -449,6 +451,48 @@ impl NodeRepo for PgNodeRepo {
         Ok(rows.iter().map(version_from).collect())
     }
 
+    async fn known_keys(&self, keys: &[String]) -> Result<HashSet<String>, RepoError> {
+        if keys.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let rows = sqlx::query(
+            "SELECT blob_key AS key FROM file_versions WHERE blob_key = ANY($1)
+             UNION
+             SELECT thumb_key AS key FROM file_versions WHERE thumb_key = ANY($1)",
+        )
+        .bind(keys)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage)?;
+        Ok(rows.iter().map(|r| r.get("key")).collect())
+    }
+
+    async fn versions_of(
+        &self,
+        session: &str,
+        node_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Vec<FileVersion>>, RepoError> {
+        if node_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(&format!(
+            "{VERSION_SELECT} JOIN nodes n ON n.id = v.node_id
+             WHERE v.node_id = ANY($1) AND n.session_code = $2
+             GROUP BY v.id ORDER BY v.version DESC"
+        ))
+        .bind(node_ids)
+        .bind(session)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(storage)?;
+        let mut out: HashMap<Uuid, Vec<FileVersion>> = HashMap::new();
+        for row in &rows {
+            let v = version_from(row);
+            out.entry(v.node_id).or_default().push(v);
+        }
+        Ok(out)
+    }
+
     async fn version(
         &self,
         session: &str,
@@ -684,6 +728,43 @@ mod tests {
         let list = repo.list(&s, None).await.unwrap();
         assert_eq!(list[0].version_count, 2);
         assert_eq!(list[0].latest.as_ref().unwrap().size, 20);
+        sessions.delete(&s).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn versions_of_many_files_come_back_in_one_call_newest_first() {
+        let (repo, sessions, s) = setup().await;
+        let now = Utc::now();
+        let (a, _) = repo
+            .add_version(&s, None, "a", nv("k-a1", 1), now)
+            .await
+            .unwrap();
+        repo.add_version(&s, None, "a", nv("k-a2", 2), now)
+            .await
+            .unwrap();
+        let (b, _) = repo
+            .add_version(&s, None, "b", nv("k-b1", 3), now)
+            .await
+            .unwrap();
+        let (_, other_sessions, other) = setup().await;
+        let (foreign, _) = repo
+            .add_version(&other, None, "a", nv("k-o1", 4), now)
+            .await
+            .unwrap();
+
+        let got = repo
+            .versions_of(&s, &[a.id, b.id, foreign.id])
+            .await
+            .unwrap();
+        assert_eq!(
+            got[&a.id].iter().map(|v| v.version).collect::<Vec<_>>(),
+            [2, 1]
+        );
+        assert_eq!(got[&b.id].len(), 1);
+        // A node of another session is not visible, and an empty request asks nothing.
+        assert!(!got.contains_key(&foreign.id));
+        assert!(repo.versions_of(&s, &[]).await.unwrap().is_empty());
+        other_sessions.delete(&other).await.unwrap();
         sessions.delete(&s).await.unwrap();
     }
 

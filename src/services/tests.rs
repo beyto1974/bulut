@@ -37,10 +37,10 @@ pub async fn fixture() -> Fixture {
     dotenvy::dotenv().ok();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = connect(&url).await.unwrap();
-    let blobs = Arc::new(MemoryBlobStore::new());
     let nodes = Arc::new(PgNodeRepo::new(pool.clone()));
     // Start far in the past so a sweep here never reaches sessions other tests made with the real clock.
     let clock = Arc::new(ManualClock::new(Utc::now() - Duration::days(120)));
+    let blobs = Arc::new(MemoryBlobStore::with_clock(clock.clone()));
     let uploads = Arc::new(UploadService {
         folders_enabled: true,
         uploads: Arc::new(PgUploadRepo::new(pool.clone())),

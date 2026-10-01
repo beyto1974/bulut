@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -62,6 +64,18 @@ impl UploadRepo for PgUploadRepo {
         .await
         .map_err(storage)?;
         Ok(())
+    }
+
+    async fn known_keys(&self, keys: &[String]) -> Result<HashSet<String>, RepoError> {
+        if keys.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let rows = sqlx::query("SELECT blob_key FROM uploads WHERE blob_key = ANY($1)")
+            .bind(keys)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(storage)?;
+        Ok(rows.iter().map(|r| r.get("blob_key")).collect())
     }
 
     async fn get(&self, session: &str, id: Uuid) -> Result<Option<Upload>, RepoError> {

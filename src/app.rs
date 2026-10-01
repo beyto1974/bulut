@@ -13,6 +13,7 @@ use crate::http::AppState;
 use crate::ports::blob_store::BlobStore;
 use crate::ports::clock::SystemClock;
 use crate::ports::code_generator::RandomCodeGenerator;
+use crate::services::orphan_service::OrphanSweeper;
 use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
 use crate::services::upload_service::UploadService;
@@ -29,9 +30,10 @@ pub fn build_state(
         max_session_bytes: i64::try_from(config.max_session_bytes).unwrap_or(i64::MAX),
     }));
     let clock = Arc::new(SystemClock);
+    let uploads_repo = Arc::new(PgUploadRepo::new(pool.clone()));
     let uploads = Arc::new(UploadService {
         folders_enabled: config.folders_enabled,
-        uploads: Arc::new(PgUploadRepo::new(pool.clone())),
+        uploads: uploads_repo.clone(),
         nodes: nodes.clone(),
         blobs: blobs.clone(),
         clock: clock.clone(),
@@ -51,6 +53,16 @@ pub fn build_state(
         code_length: config.code_length,
         idle_ttl_days: config.session_idle_ttl_days,
     });
+    let orphans = (config.orphan_grace_hours > 0).then(|| {
+        Arc::new(OrphanSweeper {
+            blobs: blobs.clone(),
+            nodes: nodes.clone(),
+            uploads: uploads_repo.clone(),
+            clock: clock.clone(),
+            grace: chrono::Duration::hours(i64::from(config.orphan_grace_hours)),
+            code_length: config.code_length,
+        })
+    });
     let tree = Arc::new(TreeService {
         folders_enabled: config.folders_enabled,
         max_tags: config.max_tags_per_version,
@@ -64,11 +76,17 @@ pub fn build_state(
         sessions,
         tree,
         uploads,
+        orphans,
     }
 }
 
 /// Periodically deletes sessions that have been idle longer than the configured window.
-pub fn spawn_sweeper(sessions: Arc<SessionService>, uploads: Arc<UploadService>, every: Duration) {
+pub fn spawn_sweeper(
+    sessions: Arc<SessionService>,
+    uploads: Arc<UploadService>,
+    orphans: Option<Arc<OrphanSweeper>>,
+    every: Duration,
+) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(every);
         loop {
@@ -85,6 +103,14 @@ pub fn spawn_sweeper(sessions: Arc<SessionService>, uploads: Arc<UploadService>,
                 }
                 Ok(_) => tracing::debug!("idle sweep found nothing"),
                 Err(e) => tracing::error!(error = %e, "idle sweep failed"),
+            }
+            // After the idle sweep, so what it just purged is not counted as an orphan.
+            if let Some(orphans) = &orphans {
+                match orphans.sweep().await {
+                    Ok(0) => tracing::debug!("orphan sweep found nothing"),
+                    Ok(n) => tracing::warn!(count = n, "deleted objects no file refers to"),
+                    Err(e) => tracing::error!(error = %e, "orphan sweep failed"),
+                }
             }
         }
     });
