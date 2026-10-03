@@ -146,16 +146,24 @@ pub struct NamedQuery {
     pub name: String,
     pub parent: Option<Uuid>,
     pub tag: Option<String>,
+    /// Ask for `Content-Disposition: inline`. Honoured for raster images only, see `inline_image`.
+    pub inline: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct InlineQuery {
+    pub inline: Option<String>,
 }
 
 pub async fn download_version(
     State(state): State<AppState>,
     Path((code, version)): Path<(String, Uuid)>,
+    Query(q): Query<InlineQuery>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
     let session = state.sessions.open(&code).await?;
     let (node, v) = state.tree.resolve_version(&session.code, version).await?;
-    serve(&state, &node, &v, &headers).await
+    serve(&state, &node, &v, &headers, q.inline.is_some()).await
 }
 
 /// Download by name, optionally a tag: `?name=build.apk&tag=v1.4.1`. No tag means the latest version.
@@ -170,7 +178,7 @@ pub async fn download_named(
         .tree
         .resolve_named(&session.code, q.parent, &q.name, q.tag.as_deref())
         .await?;
-    serve(&state, &node, &v, &headers).await
+    serve(&state, &node, &v, &headers, q.inline.is_some()).await
 }
 
 async fn serve(
@@ -178,7 +186,9 @@ async fn serve(
     node: &Node,
     v: &FileVersion,
     headers: &HeaderMap,
+    want_inline: bool,
 ) -> ApiResult<Response> {
+    let inline = want_inline && inline_image(state, v).await;
     let size = v.size as u64;
     let range = match headers.get(header::RANGE).and_then(|h| h.to_str().ok()) {
         Some(h) => match parse_range(h, size) {
@@ -209,7 +219,7 @@ async fn serve(
     set(
         h,
         header::CONTENT_DISPOSITION,
-        &content_disposition(&node.name),
+        &content_disposition(&node.name, inline),
     );
     // Files are user content: never let the browser run or sniff them on this origin.
     set(h, header::X_CONTENT_TYPE_OPTIONS, "nosniff");
@@ -274,8 +284,64 @@ pub fn parse_range(header: &str, size: u64) -> RangeRequest {
     RangeRequest::Partial((start, end))
 }
 
-/// `attachment` with an ASCII fallback and the exact UTF-8 name (RFC 6266 and 5987).
-pub fn content_disposition(name: &str) -> String {
+/// Content types that may be shown inline. Raster images only: no SVG, no HTML, no PDF.
+const INLINE_TYPES: [&str; 5] = [
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+];
+
+/// The image type the first bytes of a file really have. The stored content type comes from the
+/// uploader, so it is never trusted on its own.
+pub fn sniff_image(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if head.len() >= 12
+        && &head[4..8] == b"ftyp"
+        && matches!(&head[8..12], b"avif" | b"avis")
+    {
+        Some("image/avif")
+    } else {
+        None
+    }
+}
+
+/// True when the stored type is an allowed raster image and the bytes agree with it.
+async fn inline_image(state: &AppState, v: &FileVersion) -> bool {
+    let declared = v
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !INLINE_TYPES.contains(&declared.as_str()) || v.size == 0 {
+        return false;
+    }
+    let Ok(read) = state.tree.open(v, Some((0, 15))).await else {
+        return false;
+    };
+    let mut head = Vec::with_capacity(16);
+    let mut stream = read.stream;
+    while let Some(Ok(chunk)) = futures_util::StreamExt::next(&mut stream).await {
+        head.extend_from_slice(&chunk);
+        if head.len() >= 16 {
+            break;
+        }
+    }
+    sniff_image(&head) == Some(declared.as_str())
+}
+
+/// `attachment` (or `inline`) with an ASCII fallback and the exact UTF-8 name (RFC 6266 and 5987).
+pub fn content_disposition(name: &str, inline: bool) -> String {
     let fallback: String = name
         .chars()
         .map(|c| {
@@ -294,7 +360,8 @@ pub fn content_disposition(name: &str) -> String {
             encoded.push_str(&format!("%{b:02X}"));
         }
     }
-    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+    let kind = if inline { "inline" } else { "attachment" };
+    format!("{kind}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 #[cfg(test)]
@@ -322,12 +389,35 @@ mod tests {
     }
 
     #[test]
+    fn only_real_raster_images_are_sniffed() {
+        assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\n\0\0"), Some("image/png"));
+        assert_eq!(
+            sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]),
+            Some("image/jpeg")
+        );
+        assert_eq!(sniff_image(b"GIF89a\x01\0"), Some("image/gif"));
+        assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(sniff_image(b"\0\0\0\x1cftypavif\0\0"), Some("image/avif"));
+        assert_eq!(
+            sniff_image(b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+            None
+        );
+        assert_eq!(sniff_image(b"<html><script>"), None);
+        assert_eq!(sniff_image(b""), None);
+    }
+
+    #[test]
+    fn disposition_can_be_inline() {
+        assert!(content_disposition("a.png", true).starts_with("inline; "));
+    }
+
+    #[test]
     fn disposition_keeps_ascii_and_encodes_the_rest() {
         assert_eq!(
-            content_disposition("build.apk"),
+            content_disposition("build.apk", false),
             "attachment; filename=\"build.apk\"; filename*=UTF-8''build.apk"
         );
-        let d = content_disposition("café \"x\".txt");
+        let d = content_disposition("café \"x\".txt", false);
         assert!(d.contains("filename=\"caf_ _x_.txt\""), "{d}");
         assert!(
             d.contains("filename*=UTF-8''caf%C3%A9%20%22x%22.txt"),

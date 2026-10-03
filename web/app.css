@@ -100,6 +100,8 @@ tr.row-item[aria-selected="true"] { background: var(--sel); box-shadow: inset 3p
 .progress { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
 
+.preview.image { height: auto; max-height: 280px; overflow: hidden; background: repeating-conic-gradient(var(--sel) 0 25%, var(--line) 0 50%) 0 0 / 16px 16px; }
+.preview.image img { display: block; max-width: 100%; max-height: 280px; object-fit: contain; }
 .inspector { padding: 16px; display: grid; gap: 14px; }
 .inspector .placeholder { color: var(--muted); }
 .preview { height: 96px; border-radius: 6px; background: repeating-linear-gradient(135deg, var(--sel) 0 10px, var(--line) 10px 11px); display: grid; place-items: center; font: 12px var(--mono); color: var(--muted); }

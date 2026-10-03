@@ -247,6 +247,20 @@
     function currentItem() { return state.items.find((i) => i.id === state.selectedId); }
     function currentVersion() { return state.versions.find((v) => v.id === state.versionId); }
 
+    const PREVIEW_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'];
+
+    // Raster images are shown with an <img>. The server only sends them inline when the bytes match.
+    function previewBox(ver, name) {
+      const type = (ver.content_type || '').split(';')[0].trim().toLowerCase();
+      const placeholder = h('div', { class: 'preview', 'aria-hidden': 'true', text: ver.content_type });
+      if (!PREVIEW_TYPES.includes(type)) return placeholder;
+      const url = `${base}/versions/${ver.id}/download?inline=1`;
+      const img = h('img', { src: url, alt: name, loading: 'lazy' });
+      const box = h('a', { class: 'preview image', href: url, target: '_blank', rel: 'noopener', title: 'Open full size' }, img);
+      img.addEventListener('error', () => box.replaceWith(placeholder));
+      return box;
+    }
+
     function renderInspector() {
       const it = currentItem();
       const ver = currentVersion();
@@ -306,7 +320,7 @@
       }, h('span', { text: `v${v.version}${v.is_latest ? ' · latest' : ''}` }), h('span', { text: `${fmtSize(v.size)} · ${fmtTime(v.uploaded_at)}` })));
 
       inspector.replaceChildren(
-        h('div', { class: 'preview', 'aria-hidden': 'true', text: ver.content_type }),
+        previewBox(ver, it.name),
         h('div', null, h('h2', { id: 'inspector-name', text: it.name }), h('div', { class: 'muted mono', text: `${code} / ${it.name}` })),
         h('dl', null,
           h('dt', { text: 'Version' }), h('dd', { text: `v${ver.version} of ${state.versions.length}` }),

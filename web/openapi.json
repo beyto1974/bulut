@@ -142,6 +142,7 @@
         "parameters": [
           { "name": "name", "in": "query", "required": true, "schema": { "type": "string" } },
           { "name": "tag", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "inline", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Any value asks for Content-Disposition: inline so an <img> or a browser tab shows the file. Only honoured for PNG, JPEG, GIF, WebP and AVIF whose bytes match their type; everything else stays an attachment." },
           { "name": "Range", "in": "header", "required": false, "schema": { "type": "string" }, "description": "A single byte range such as bytes=0-1023." }
         ],
         "responses": { "200": { "description": "The file" }, "206": { "description": "Part of the file" }, "404": { "$ref": "#/components/responses/NotFound" }, "416": { "description": "Range not satisfiable" } }
@@ -152,6 +153,7 @@
       "get": {
         "summary": "Download one version by id",
         "operationId": "downloadVersion",
+        "parameters": [{ "name": "inline", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Any value asks for Content-Disposition: inline so an <img> or a browser tab shows the file. Only honoured for PNG, JPEG, GIF, WebP and AVIF whose bytes match their type; everything else stays an attachment." }],
         "responses": { "200": { "description": "The file" }, "206": { "description": "Part of the file" }, "404": { "$ref": "#/components/responses/NotFound" }, "416": { "description": "Range not satisfiable" } }
       }
     },
