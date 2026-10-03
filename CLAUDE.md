@@ -24,7 +24,8 @@ builds the image from the bumped commit. Commits by CI carry `[skip ci]`.
   under a per-session lock, so parallel uploads cannot overshoot. Keep new limits there.
 - Folders are implemented but disabled by default (`FOLDERS_ENABLED`). Do not build UI for them or mention them in
   user-facing docs until that is planned.
-- Uploaded files are only ever served as downloads with a sandboxing CSP. Do not add inline previews on the
-  application's origin.
+- Uploaded files are served as downloads with a sandboxing CSP. The only exception is `?inline=1` for PNG, JPEG, GIF,
+  WebP and AVIF, and only when the first bytes match the stored type (`inline_image` in `src/http/files.rs`). Never
+  inline SVG, HTML, PDF or anything else, and do not add other previews on the application's origin.
 - Same name creates a new file version. The `latest` tag moves to the newest upload.
 - Mail, OTP and themed HTML mails are out of scope.

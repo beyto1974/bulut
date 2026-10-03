@@ -364,3 +364,48 @@ async fn a_full_session_answers_409_but_still_takes_new_versions() {
     assert_eq!(status, StatusCode::CREATED);
     raw(&app, Method::DELETE, &format!("/api/s/{code}"), &[], b"").await;
 }
+
+#[tokio::test]
+async fn inline_is_only_for_real_raster_images() {
+    let (app, _f) = app().await;
+    let code = new_session(&app).await;
+    let png: &'static [u8] = b"\x89PNG\r\n\x1a\n0123456789";
+    let upload = |name: &'static str, ctype: &'static str, body: &'static [u8]| {
+        let (app, code) = (app.clone(), code.clone());
+        async move {
+            let url = format!("/api/s/{code}/upload?name={name}");
+            raw(&app, Method::PUT, &url, &[("content-type", ctype)], body).await;
+            let url = format!("/api/s/{code}/download?name={name}&inline=1");
+            raw(&app, Method::GET, &url, &[], b"").await
+        }
+    };
+    let disposition = |h: &HeaderMap| h["content-disposition"].to_str().unwrap().to_string();
+
+    let (status, h, b) = upload("pic.png", "image/png", png).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(disposition(&h).starts_with("inline;"), "{h:?}");
+    assert_eq!(h["x-content-type-options"], "nosniff");
+    assert!(h["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("sandbox"));
+    assert_eq!(&b[..], png);
+
+    // Declared as an image, bytes are not.
+    let (_, h, _) = upload("fake.png", "image/png", b"<script>alert(1)</script>").await;
+    assert!(disposition(&h).starts_with("attachment;"), "{h:?}");
+    // SVG is never inline, whatever it claims.
+    let (_, h, _) = upload(
+        "a.svg",
+        "image/svg+xml",
+        b"<svg xmlns='http://www.w3.org/2000/svg'/>",
+    )
+    .await;
+    assert!(disposition(&h).starts_with("attachment;"), "{h:?}");
+    // A real image without the query stays a download.
+    let url = format!("/api/s/{code}/download?name=pic.png");
+    let (_, h, _) = raw(&app, Method::GET, &url, &[], b"").await;
+    assert!(disposition(&h).starts_with("attachment;"), "{h:?}");
+
+    raw(&app, Method::DELETE, &format!("/api/s/{code}"), &[], b"").await;
+}
