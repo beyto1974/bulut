@@ -106,6 +106,8 @@ The container answers `GET /healthz` and has a built-in health check.
 | `MAX_FILE_BYTES` | `1073741824` | Largest file, 1 GiB. |
 | `CHUNK_SIZE` | `8388608` | Upload part size, at least 5 MiB. The file limit must fit in 10000 parts. |
 | `SESSION_IDLE_TTL_DAYS` | `7` | Days without activity before a session and its files are deleted. |
+| `UPLOAD_LINK_MAX_FILES` | `10` | Most files one upload link (MCP `create_upload_link`) accepts. |
+| `UPLOAD_LINK_TTL_MINUTES` | `15` | Minutes an upload link stays valid. |
 | `SWEEP_INTERVAL_SECS` | `3600` | How often idle sessions and orphaned objects are looked for. |
 | `ORPHAN_GRACE_HOURS` | `24` | Objects in the bucket that no file refers to are deleted once they are this old. `0` turns it off. Only keys named `<session code>/...` are ever touched. |
 | `CODE_LENGTH` | `5` | Characters in a session code. |
@@ -133,7 +135,10 @@ Files larger than a few hundred MB are better sent with the chunked calls (`/upl
 
 **Language models.** `GET /<code>/llms.txt` describes a session as plain text, `GET /llms.txt` explains the
 service. `POST /mcp` is an MCP endpoint (streamable HTTP, JSON-RPC over POST) with tools to create a session,
-read it, upload and read text files, set notes and tags.
+read it, upload and read text files, set notes and tags, and `create_upload_link`, which returns a temporary
+`/api/u/<random>?name=...` URL for sending up to `UPLOAD_LINK_MAX_FILES` files with `PUT` or `POST` and no token.
+The reverse proxy must let `/api/u/*` through without the bearer token; the random id is the only grant, it
+opens one session and expires after `UPLOAD_LINK_TTL_MINUTES`.
 
 ## Development
 

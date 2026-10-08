@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::Config;
+use crate::services::link_service::LinkService;
 use crate::services::orphan_service::OrphanSweeper;
 use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub sessions: Arc<SessionService>,
     pub tree: Arc<TreeService>,
     pub uploads: Arc<UploadService>,
+    pub links: Arc<LinkService>,
     /// `None` when `ORPHAN_GRACE_HOURS=0` switches the clean-up off.
     pub orphans: Option<Arc<OrphanSweeper>>,
 }
@@ -84,6 +86,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/s/{code}/upload",
             put(files::simple_upload).layer(DefaultBodyLimit::disable()),
+        )
+        // Reached without the bearer token: the proxy exempts `/api/u/*`. The random id is the grant.
+        .route(
+            "/api/u/{id}",
+            put(files::link_upload)
+                .post(files::link_upload)
+                .layer(DefaultBodyLimit::disable()),
         )
         .route("/api/s/{code}/download", get(files::download_named))
         .route(

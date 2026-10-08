@@ -116,15 +116,7 @@ pub async fn simple_upload(
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let tags: Vec<String> = q
-        .tag
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
-        .collect();
+    let tags = split_tags(q.tag.as_deref());
     let (node, version) = state
         .uploads
         .upload_stream(
@@ -139,6 +131,43 @@ pub async fn simple_upload(
         .await?;
     tracing::info!(session = %session.code, file = %node.name, version = version.version, size = version.size, "file stored");
     Ok((StatusCode::CREATED, Json(Stored { node, version })))
+}
+
+#[derive(Deserialize)]
+pub struct LinkUploadQuery {
+    pub name: String,
+    pub tag: Option<String>,
+}
+
+/// `PUT` or `POST /api/u/{id}?name=build.apk` with the raw file as the body. Each call uses one
+/// slot of the link; the link is made by the `create_upload_link` MCP tool.
+pub async fn link_upload(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<LinkUploadQuery>,
+    headers: HeaderMap,
+    body: Body,
+) -> ApiResult<(StatusCode, Json<Stored>)> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let tags = split_tags(q.tag.as_deref());
+    let (node, version) = state
+        .links
+        .upload(&id, &q.name, content_type, &tags, body.into_data_stream())
+        .await?;
+    tracing::info!(file = %node.name, version = version.version, size = version.size, "file stored through an upload link");
+    Ok((StatusCode::CREATED, Json(Stored { node, version })))
+}
+
+fn split_tags(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 #[derive(Deserialize)]

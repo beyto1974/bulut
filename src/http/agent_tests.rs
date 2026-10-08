@@ -172,6 +172,7 @@ async fn mcp_handshake_and_errors() {
         [
             "create_session",
             "get_session",
+            "create_upload_link",
             "upload_text",
             "read_text_file",
             "set_note",
@@ -437,4 +438,59 @@ fn origin_is_scheme_host_and_port() {
     );
     assert_eq!(origin_of("http://localhost:3032"), "http://localhost:3032");
     assert_eq!(origin_of("http://localhost:3032/"), "http://localhost:3032");
+}
+
+#[tokio::test]
+async fn mcp_upload_link_takes_files_without_the_session_route() {
+    let (app, _f) = app().await;
+    let code = new_session(&app).await;
+    let (_, reply) = rpc(
+        &app,
+        call(1, "create_upload_link", json!({ "code": code, "files": 2 })),
+    )
+    .await;
+    let (is_error, text) = tool_text(&reply);
+    assert!(!is_error, "{text}");
+    let id = text
+        .split("/api/u/")
+        .nth(1)
+        .and_then(|t| t.split('?').next())
+        .unwrap()
+        .to_string();
+    assert_eq!(id.len(), 32);
+
+    let url = format!("/api/u/{id}?name=a.bin&tag=v1");
+    assert_eq!(
+        raw(&app, Method::PUT, &url, &[], b"one").await.0,
+        StatusCode::CREATED
+    );
+    let url = format!("/api/u/{id}?name=b.bin");
+    assert_eq!(
+        raw(&app, Method::POST, &url, &[], b"two").await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        raw(&app, Method::POST, &url, &[], b"three").await.0,
+        StatusCode::NOT_FOUND,
+        "used up"
+    );
+    let (status, _, body) = raw(&app, Method::GET, &format!("/{code}/llms.txt"), &[], b"").await;
+    assert_eq!(status, StatusCode::OK);
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains("a.bin") && text.contains("b.bin"), "{text}");
+    raw(&app, Method::DELETE, &format!("/api/s/{code}"), &[], b"").await;
+}
+
+#[tokio::test]
+async fn mcp_upload_link_rejects_too_many_files() {
+    let (app, _f) = app().await;
+    let code = new_session(&app).await;
+    // The test fixture allows 3 files per link.
+    let (_, reply) = rpc(
+        &app,
+        call(1, "create_upload_link", json!({ "code": code, "files": 4 })),
+    )
+    .await;
+    assert!(tool_text(&reply).0);
+    raw(&app, Method::DELETE, &format!("/api/s/{code}"), &[], b"").await;
 }

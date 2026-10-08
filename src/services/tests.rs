@@ -8,6 +8,7 @@ use chrono::{Duration, Utc};
 
 use crate::adapters::memory_blobs::MemoryBlobStore;
 use crate::adapters::postgres::{connect, PgSessionRepo};
+use crate::adapters::postgres_links::PgLinkRepo;
 use crate::adapters::postgres_nodes::PgNodeRepo;
 use crate::adapters::postgres_uploads::PgUploadRepo;
 use crate::ports::blob_store::BlobStore;
@@ -15,6 +16,7 @@ use crate::ports::clock::{Clock, ManualClock};
 use crate::ports::code_generator::RandomCodeGenerator;
 use crate::ports::node_repo::{NewVersion, NodeRepo};
 use crate::services::error::ServiceError;
+use crate::services::link_service::LinkService;
 use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
 use crate::services::upload_service::UploadService;
@@ -27,6 +29,7 @@ pub struct Fixture {
     pub sessions: Arc<SessionService>,
     pub tree: Arc<TreeService>,
     pub uploads: Arc<UploadService>,
+    pub links: Arc<LinkService>,
     pub nodes: Arc<PgNodeRepo>,
     pub blobs: Arc<MemoryBlobStore>,
     pub clock: Arc<ManualClock>,
@@ -54,6 +57,7 @@ pub async fn fixture() -> Fixture {
         max_pending: 1000,
         max_tags: 1000,
     });
+    let links_repo = Arc::new(PgLinkRepo::new(pool.clone()));
     let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),
         nodes: nodes.clone(),
@@ -63,6 +67,14 @@ pub async fn fixture() -> Fixture {
         clock: clock.clone(),
         code_length: 5,
         idle_ttl_days: 7,
+    });
+    let links = Arc::new(LinkService {
+        links: links_repo,
+        sessions: sessions.clone(),
+        uploads: uploads.clone(),
+        clock: clock.clone(),
+        max_files: 3,
+        ttl: Duration::minutes(15),
     });
     let tree = Arc::new(TreeService {
         folders_enabled: true,
@@ -76,6 +88,7 @@ pub async fn fixture() -> Fixture {
         sessions,
         tree,
         uploads,
+        links,
         nodes,
         blobs,
         clock,
