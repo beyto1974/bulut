@@ -28,6 +28,14 @@ fn tools() -> Value {
             "inputSchema": { "type": "object", "required": ["code"], "properties": { "code": code } }
         },
         {
+            "name": "create_upload_link",
+            "description": "Make a temporary upload URL for a session, for files too big or binary for upload_text. The holder sends each file with `curl -T file '<url>?name=file.ext'` (PUT or POST, raw body) and needs no token. The URL stops working after the given number of files or when it expires.",
+            "inputSchema": { "type": "object", "required": ["code"], "properties": {
+                "code": code,
+                "files": { "type": "integer", "minimum": 1, "description": "How many files the URL accepts. Default 1, the server sets the maximum." }
+            } }
+        },
+        {
             "name": "upload_text",
             "description": "Store a text file in a session. A file with the same name becomes a new version. For binary files use the REST upload.",
             "inputSchema": { "type": "object", "required": ["code", "name", "content"], "properties": {
@@ -132,6 +140,22 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Result<String,
             ))
         }
         "get_session" => render_index(state, text_arg(args, "code")?).await,
+        "create_upload_link" => {
+            let files = match args.get("files") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(
+                    || ServiceError::Invalid("files must be a positive integer".into()),
+                )?),
+            };
+            let link = state.links.create(text_arg(args, "code")?, files).await?;
+            Ok(format!(
+                "Upload URL: {base}/api/u/{id}?name=<file name>\nSend each file as the raw body of a PUT or POST, for example: curl -T file.bin '{base}/api/u/{id}?name=file.bin'\nIt takes {n} file(s) and expires at {exp}. Add &tag=a,b to tag a file.",
+                base = state.config.base_url,
+                id = link.id,
+                n = link.files_total,
+                exp = link.expires_at.to_rfc3339()
+            ))
+        }
         "upload_text" => {
             let session = state.sessions.open(text_arg(args, "code")?).await?;
             let file = text_arg(args, "name")?;

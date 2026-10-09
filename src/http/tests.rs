@@ -23,6 +23,7 @@ pub(super) async fn app() -> (Router, Fixture) {
         sessions: f.sessions.clone(),
         tree: f.tree.clone(),
         uploads: f.uploads.clone(),
+        links: f.links.clone(),
         orphans: None,
     };
     (router(state), f)

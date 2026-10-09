@@ -6,6 +6,7 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::adapters::postgres::PgSessionRepo;
+use crate::adapters::postgres_links::PgLinkRepo;
 use crate::adapters::postgres_nodes::{Limits, PgNodeRepo};
 use crate::adapters::postgres_uploads::PgUploadRepo;
 use crate::config::Config;
@@ -13,6 +14,7 @@ use crate::http::AppState;
 use crate::ports::blob_store::BlobStore;
 use crate::ports::clock::SystemClock;
 use crate::ports::code_generator::RandomCodeGenerator;
+use crate::services::link_service::LinkService;
 use crate::services::orphan_service::OrphanSweeper;
 use crate::services::session_service::SessionService;
 use crate::services::tree_service::TreeService;
@@ -43,6 +45,7 @@ pub fn build_state(
         max_pending: config.max_pending_uploads,
         max_tags: config.max_tags_per_version,
     });
+    let links_repo = Arc::new(PgLinkRepo::new(pool.clone()));
     let sessions = Arc::new(SessionService {
         sessions: Arc::new(PgSessionRepo::new(pool)),
         nodes: nodes.clone(),
@@ -52,6 +55,14 @@ pub fn build_state(
         clock: clock.clone(),
         code_length: config.code_length,
         idle_ttl_days: config.session_idle_ttl_days,
+    });
+    let links = Arc::new(LinkService {
+        links: links_repo,
+        sessions: sessions.clone(),
+        uploads: uploads.clone(),
+        clock: clock.clone(),
+        max_files: config.upload_link_max_files,
+        ttl: chrono::Duration::minutes(i64::from(config.upload_link_ttl_minutes)),
     });
     let orphans = (config.orphan_grace_hours > 0).then(|| {
         Arc::new(OrphanSweeper {
@@ -76,6 +87,7 @@ pub fn build_state(
         sessions,
         tree,
         uploads,
+        links,
         orphans,
     }
 }

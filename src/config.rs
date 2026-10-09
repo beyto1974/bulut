@@ -74,6 +74,10 @@ pub struct Config {
     /// Folder support is built but switched off until the UI handles it.
     pub folders_enabled: bool,
     pub session_idle_ttl_days: u32,
+    /// Most files one upload link takes.
+    pub upload_link_max_files: u32,
+    /// Minutes an upload link stays valid.
+    pub upload_link_ttl_minutes: u32,
     pub sweep_interval_secs: u64,
     /// Objects in the bucket that no file refers to are deleted once they are this many hours
     /// old. `0` switches the clean-up off.
@@ -172,6 +176,19 @@ impl Config {
         if session_idle_ttl_days == 0 {
             return Err(ConfigError::Invalid("SESSION_IDLE_TTL_DAYS", "0".into()));
         }
+        let upload_link_max_files: u32 =
+            num("UPLOAD_LINK_MAX_FILES", get("UPLOAD_LINK_MAX_FILES"), 10)?;
+        if upload_link_max_files == 0 {
+            return Err(ConfigError::Invalid("UPLOAD_LINK_MAX_FILES", "0".into()));
+        }
+        let upload_link_ttl_minutes: u32 = num(
+            "UPLOAD_LINK_TTL_MINUTES",
+            get("UPLOAD_LINK_TTL_MINUTES"),
+            15,
+        )?;
+        if upload_link_ttl_minutes == 0 {
+            return Err(ConfigError::Invalid("UPLOAD_LINK_TTL_MINUTES", "0".into()));
+        }
         Ok(Self {
             app_env,
             log_level: get("LOG_LEVEL").unwrap_or("info").to_ascii_lowercase(),
@@ -190,6 +207,8 @@ impl Config {
             max_tags_per_version,
             folders_enabled,
             session_idle_ttl_days,
+            upload_link_max_files,
+            upload_link_ttl_minutes,
             sweep_interval_secs: num("SWEEP_INTERVAL_SECS", get("SWEEP_INTERVAL_SECS"), 3600)?,
             orphan_grace_hours: num("ORPHAN_GRACE_HOURS", get("ORPHAN_GRACE_HOURS"), 24)?,
         })
@@ -216,6 +235,10 @@ mod tests {
         assert_eq!(c.bind_addr.to_string(), "0.0.0.0");
         assert_eq!(c.code_length, 5);
         assert_eq!(c.session_idle_ttl_days, 7);
+        assert_eq!(
+            (c.upload_link_max_files, c.upload_link_ttl_minutes),
+            (10, 15)
+        );
         assert_eq!(c.orphan_grace_hours, 24);
         assert_eq!(c.max_file_bytes, 1024 * 1024 * 1024);
         assert!(!c.folders_enabled, "folders are off by default");
@@ -267,6 +290,8 @@ mod tests {
         assert!(Config::from_map(&vars(&[("CODE_LENGTH", "1")])).is_err());
         assert!(Config::from_map(&vars(&[("CHUNK_SIZE", "1024")])).is_err());
         assert!(Config::from_map(&vars(&[("SESSION_IDLE_TTL_DAYS", "0")])).is_err());
+        assert!(Config::from_map(&vars(&[("UPLOAD_LINK_MAX_FILES", "0")])).is_err());
+        assert!(Config::from_map(&vars(&[("UPLOAD_LINK_TTL_MINUTES", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("MAX_FILE_BYTES", "0")])).is_err());
         assert!(Config::from_map(&vars(&[("FOLDERS_ENABLED", "maybe")])).is_err());
         assert!(Config::from_map(&vars(&[("ORPHAN_GRACE_HOURS", "-1")])).is_err());

@@ -1,4 +1,5 @@
 pub mod error;
+pub mod link_service;
 pub mod orphan_service;
 pub mod session_service;
 pub mod tree_service;
@@ -10,6 +11,8 @@ mod complete_retry_tests;
 mod folder_flag_tests;
 #[cfg(test)]
 pub(crate) mod limit_tests;
+#[cfg(test)]
+mod link_tests;
 #[cfg(test)]
 mod orphan_tests;
 #[cfg(test)]
