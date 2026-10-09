@@ -36,6 +36,29 @@ fn random_id() -> String {
         .collect()
 }
 
+/// Gives a link slot back if the upload future is dropped before it finishes.
+struct SlotGuard {
+    links: Arc<dyn LinkRepo>,
+    id: String,
+    armed: bool,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (links, id) = (self.links.clone(), std::mem::take(&mut self.id));
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                if let Err(e) = links.release(&id).await {
+                    tracing::warn!(error = %e, "cannot give an upload link slot back");
+                }
+            });
+        }
+    }
+}
+
 impl LinkService {
     pub async fn create(&self, code: &str, files: Option<u32>) -> Result<UploadLink, ServiceError> {
         let session = self.sessions.open(code).await?;
@@ -47,9 +70,14 @@ impl LinkService {
             )));
         }
         let now: DateTime<Utc> = self.clock.now();
-        self.links
+        // Housekeeping must not stop a link from being made.
+        if let Err(e) = self
+            .links
             .purge_expired(now - Duration::hours(PURGE_AFTER))
-            .await?;
+            .await
+        {
+            tracing::warn!(error = %e, "cannot purge expired upload links");
+        }
         let link = UploadLink {
             id: random_id(),
             session_code: session.code,
@@ -81,6 +109,13 @@ impl LinkService {
             .consume(id, self.clock.now())
             .await?
             .ok_or(ServiceError::NotFound)?;
+        // A dropped request (client gone, proxy timeout) never reaches the code below: the guard
+        // gives the slot back then.
+        let mut guard = SlotGuard {
+            links: self.links.clone(),
+            id: id.to_string(),
+            armed: true,
+        };
         let stored = self
             .uploads
             .upload_stream(
@@ -93,8 +128,11 @@ impl LinkService {
                 body,
             )
             .await;
+        guard.armed = false;
         if stored.is_err() {
-            self.links.release(id).await?;
+            if let Err(e) = self.links.release(id).await {
+                tracing::warn!(error = %e, "cannot give an upload link slot back");
+            }
         }
         stored
     }

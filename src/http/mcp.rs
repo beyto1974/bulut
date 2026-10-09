@@ -141,10 +141,12 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Result<String,
         }
         "get_session" => render_index(state, text_arg(args, "code")?).await,
         "create_upload_link" => {
-            let files = args
-                .get("files")
-                .and_then(Value::as_u64)
-                .map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+            let files = match args.get("files") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(
+                    || ServiceError::Invalid("files must be a positive integer".into()),
+                )?),
+            };
             let link = state.links.create(text_arg(args, "code")?, files).await?;
             Ok(format!(
                 "Upload URL: {base}/api/u/{id}?name=<file name>\nSend each file as the raw body of a PUT or POST, for example: curl -T file.bin '{base}/api/u/{id}?name=file.bin'\nIt takes {n} file(s) and expires at {exp}. Add &tag=a,b to tag a file.",
