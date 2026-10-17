@@ -91,8 +91,13 @@ async fn main() {
         });
     tracing::info!(%addr, env, version = VERSION, idle_days, "bulut started");
 
+    let changes = state.changes.clone();
     axum::serve(listener, http::router(state))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            // Open event streams would otherwise keep the shutdown waiting.
+            changes.close();
+        })
         .await
         .expect("server error");
 }

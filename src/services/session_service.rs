@@ -53,6 +53,16 @@ impl SessionService {
         ))
     }
 
+    /// Looks a session up without recording activity, for waits that are not a visit by themselves.
+    pub async fn peek(&self, raw_code: &str) -> Result<Session, ServiceError> {
+        let code =
+            ShortCode::parse(raw_code, self.code_length).map_err(|_| ServiceError::NotFound)?;
+        self.sessions
+            .get(code.as_str())
+            .await?
+            .ok_or(ServiceError::NotFound)
+    }
+
     /// Looks a session up by code and records the activity. Every read path goes through here,
     /// so any view, download or API call keeps the session alive.
     pub async fn open(&self, raw_code: &str) -> Result<Session, ServiceError> {

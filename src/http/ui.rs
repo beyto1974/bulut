@@ -16,7 +16,7 @@ const CSS: &str = include_str!("../../web/app.css");
 const JS: &str = include_str!("../../web/app.js");
 
 /// Scripts and styles only from this origin, no framing, nothing else loaded.
-const PAGE_CSP: &str = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; \
+const PAGE_CSP: &str = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; \
     connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 
 pub fn html_escape(s: &str) -> String {

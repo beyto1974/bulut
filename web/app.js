@@ -47,6 +47,38 @@
     setTimeout(() => el.remove(), isError ? 6000 : 2500);
   }
 
+  // ---------- optional bearer token ----------
+  // Only for a proxy that wants `Authorization: Bearer ...`. It stays in this browser.
+
+  const TOKEN_KEY = 'bulut.token';
+  function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (_) { return ''; } }
+  function setToken(token) {
+    try {
+      if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY);
+      return true;
+    } catch (_) { return false; }
+  }
+  function authFetch(url, opts) {
+    const token = getToken();
+    if (!token) return fetch(url, opts);
+    const headers = { ...((opts && opts.headers) || {}), authorization: `Bearer ${token}` };
+    return fetch(url, { ...opts, headers });
+  }
+  // Links and images cannot carry a header, so with a token they are fetched and handed over as blobs.
+  async function fetchBlob(url) {
+    const res = await authFetch(url);
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    return res.blob();
+  }
+  function saveBlob(blob, name) {
+    const href = URL.createObjectURL(blob);
+    const a = h('a', { href, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 10000);
+  }
+
   class ApiError extends Error {
     constructor(message, status) { super(message); this.status = status; }
   }
@@ -57,7 +89,7 @@
       opts.headers['content-type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
-    const res = await fetch(path, opts);
+    const res = await authFetch(path, opts);
     if (res.status === 204) return null;
     const text = await res.text();
     let data = null;
@@ -82,7 +114,29 @@
 
   // ---------- chrome shared by both pages ----------
 
+  function settings() {
+    const dialog = $('settings-dialog');
+    const input = $('token-input');
+    $('open-settings').addEventListener('click', () => {
+      input.value = getToken();
+      dialog.showModal();
+    });
+    $('settings-close').addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+    const store = (value, message) => {
+      if (!setToken(value)) { toast('This browser does not let the page store the token.', true); return; }
+      dialog.close();
+      toast(message);
+      // Everything on the page was fetched with the old setting.
+      setTimeout(() => location.reload(), 600);
+    };
+    $('settings-save').addEventListener('click', () => store(input.value.trim(), input.value.trim() ? 'Token saved' : 'Token removed'));
+    $('settings-clear').addEventListener('click', () => store('', 'Token removed'));
+    $('open-settings').classList.toggle('on', !!getToken());
+  }
+
   function chrome() {
+    settings();
     if (config.env && config.env !== 'production') {
       const badge = $('env-badge');
       badge.textContent = config.env;
@@ -154,7 +208,7 @@
     }
     document.title = `${code} · Bulut` + (config.env && config.env !== 'production' ? ` (${config.env})` : '');
 
-    const state = { items: [], selectedId: null, versions: [], versionId: null, queue: [], active: new Map() };
+    const state = { seq: null, seen: 0, editing: false, items: [], selectedId: null, versions: [], versionId: null, queue: [], active: new Map() };
     const base = `/api/s/${code}`;
 
     // --- skeleton ---
@@ -189,6 +243,7 @@
 
     // --- description ---
     function renderDescription(editing) {
+      state.editing = editing;
       const expiry = h('div', { class: 'expiry', id: 'expiry',
         text: `This session is deleted on ${fmtTime(sess.expires_at)} unless someone opens it before then. Every visit, download or upload restarts the ${sess.idle_ttl_days} day timer.` });
       if (!editing) {
@@ -255,9 +310,18 @@
       const placeholder = h('div', { class: 'preview', 'aria-hidden': 'true', text: ver.content_type });
       if (!PREVIEW_TYPES.includes(type)) return placeholder;
       const url = `${base}/versions/${ver.id}/download?inline=1`;
-      const img = h('img', { src: url, alt: name, loading: 'lazy' });
+      const img = h('img', { alt: name, loading: 'lazy' });
       const box = h('a', { class: 'preview image', href: url, target: '_blank', rel: 'noopener', title: 'Open full size' }, img);
       img.addEventListener('error', () => box.replaceWith(placeholder));
+      if (getToken()) {
+        fetchBlob(url).then((blob) => {
+          const local = URL.createObjectURL(blob);
+          img.src = local;
+          box.href = local;
+        }).catch(() => box.replaceWith(placeholder));
+      } else {
+        img.src = url;
+      }
       return box;
     }
 
@@ -340,8 +404,19 @@
               toast('Note saved');
             } catch (err) { toast(err.message, true); }
           } }),
-          h('a', { class: 'btn', id: 'download', href: `${base}/versions/${ver.id}/download`, text: `Download v${ver.version}` }),
+          downloadButton(`${base}/versions/${ver.id}/download`, it.name, `Download v${ver.version}`),
           del));
+    }
+
+    function downloadButton(url, name, label) {
+      const a = h('a', { class: 'btn', id: 'download', href: url, text: label });
+      if (getToken()) {
+        a.addEventListener('click', async (e) => {
+          e.preventDefault();
+          try { saveBlob(await fetchBlob(url), name); } catch (err) { toast(err.message, true); }
+        });
+      }
+      return a;
     }
 
     async function refreshVersions() {
@@ -360,10 +435,17 @@
       try { await refreshVersions(); } catch (e) { toast(e.message, true); }
     }
 
-    async function reload() {
+    // Several reloads can be in flight (an event, a returning tab, an upload): only the newest counts.
+    let reloadCount = 0;
+    async function reload(resetCursor) {
+      const mine = ++reloadCount;
       try {
         const listing = await api('GET', `${base}/files`);
+        if (mine !== reloadCount) return;
         state.items = listing.items.filter((i) => i.kind === 'file');
+        // The listing is at least as new as its cursor, so earlier events need no refresh of their own.
+        state.seen = listing.seq;
+        state.seq = resetCursor || state.seq === null ? listing.seq : Math.max(state.seq, listing.seq);
       } catch (e) {
         toast(e.message, true);
         return;
@@ -380,7 +462,7 @@
       for (let attempt = 1; attempt <= 4; attempt++) {
         try {
           const blob = file.slice((n - 1) * partSize, Math.min(n * partSize, file.size));
-          const res = await fetch(url, { method: 'PUT', body: blob, headers: { 'content-type': 'application/octet-stream' } });
+          const res = await authFetch(url, { method: 'PUT', body: blob, headers: { 'content-type': 'application/octet-stream' } });
           if (res.ok) return;
           if (res.status >= 400 && res.status < 500) {
             let msg = `Upload refused (${res.status})`;
@@ -485,19 +567,121 @@
     // --- QR dialog ---
     const dialog = $('qr-dialog');
     function openQr() {
-      $('qr-image').src = `${base}/qr.svg`;
       $('qr-url').textContent = sess.url;
-      $('qr-download').href = `${base}/qr.svg?download=1`;
+      const download = $('qr-download');
+      download.onclick = null;
+      if (getToken()) {
+        $('qr-image').removeAttribute('src');
+        fetchBlob(`${base}/qr.svg`).then((blob) => { $('qr-image').src = URL.createObjectURL(blob); }).catch((e) => toast(e.message, true));
+        download.href = '#';
+        download.onclick = async (e) => {
+          e.preventDefault();
+          try { saveBlob(await fetchBlob(`${base}/qr.svg?download=1`), `${code}.svg`); } catch (err) { toast(err.message, true); }
+        };
+      } else {
+        $('qr-image').src = `${base}/qr.svg`;
+        download.href = `${base}/qr.svg?download=1`;
+      }
       dialog.showModal();
     }
     $('qr-close').addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
 
     // Refresh when the tab is opened again. No polling: that would keep an unattended session alive.
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reload(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleRefresh({ session: true }); });
+
+    // --- live updates ---
+    // One event stream per open tab. It is read with fetch, not EventSource, because only fetch can
+    // send the token. Waiting on a quiet session does not count as activity on the server, so an
+    // unattended tab does not keep it alive; the stream pauses while the tab is hidden.
+    function readEvents(body, onEvent) {
+      const reader = body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      const pump = async () => {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          buf += decoder.decode(value, { stream: true });
+          let end;
+          while ((end = buf.search(/\r?\n\r?\n/)) >= 0) {
+            const block = buf.slice(0, end);
+            buf = buf.slice(end).replace(/^\r?\n\r?\n/, '');
+            let name = 'message';
+            let id = '';
+            const data = [];
+            for (const line of block.split(/\r?\n/)) {
+              if (!line || line.startsWith(':')) continue;
+              const colon = line.indexOf(':');
+              const field = colon < 0 ? line : line.slice(0, colon);
+              let val = colon < 0 ? '' : line.slice(colon + 1);
+              if (val.startsWith(' ')) val = val.slice(1);
+              if (field === 'event') name = val; else if (field === 'id') id = val; else if (field === 'data') data.push(val);
+            }
+            onEvent(name, id, data.join('\n'));
+          }
+        }
+      };
+      return pump();
+    }
+
+    let refreshTimer = null;
+    function scheduleRefresh(options) {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(async () => {
+        if (options && options.session && !state.editing) {
+          try { sess = await api('GET', base); renderDescription(false); } catch (_) { /* the next event retries */ }
+        }
+        await reload(options && options.reset);
+        if (state.selectedId) { try { await refreshVersions(); } catch (_) { /* file is gone */ } }
+      }, 300);
+    }
+
+    let gone = false;
+    let stream = null;
+    function onEvent(name, id, data) {
+      if (name === 'gone') { gone = true; toast('This session was deleted.', true); return; }
+      let body = {};
+      try { body = JSON.parse(data); } catch (_) { /* keep empty */ }
+      if (name === 'reset') {
+        state.seq = body.seq;
+        scheduleRefresh({ reset: true, session: true });
+        return;
+      }
+      const seq = Number(id);
+      if (!Number.isFinite(seq)) return;
+      // The listing does not carry the description, so a description change is always fetched.
+      const sessionNews = body.kind === 'session_updated';
+      if (seq > state.seq) state.seq = seq;
+      if (seq <= state.seen && !sessionNews) return;
+      scheduleRefresh({ session: sessionNews });
+    }
+
+    async function follow() {
+      let delay = 1000;
+      while (!gone) {
+        if (document.hidden) {
+          await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true }));
+          continue;
+        }
+        stream = new AbortController();
+        try {
+          const after = state.seq === null ? '' : `?after=${state.seq}`;
+          const res = await authFetch(`${base}/changes${after}`, { headers: { accept: 'text/event-stream' }, signal: stream.signal });
+          if (res.status === 404) { gone = true; return; }
+          if (!res.ok) throw new Error(`changes ${res.status}`);
+          delay = 1000;
+          await readEvents(res.body, onEvent);
+        } catch (_) { /* dropped or paused: look again below */ }
+        if (gone) return;
+        if (!document.hidden) { await sleep(delay); delay = Math.min(delay * 2, 30000); }
+      }
+    }
+    document.addEventListener('visibilitychange', () => { if (document.hidden && stream) stream.abort(); });
 
     renderDescription(false);
     await reload();
+    follow();
   }
 
   // ---------- start ----------

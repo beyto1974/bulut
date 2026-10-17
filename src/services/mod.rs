@@ -1,3 +1,4 @@
+pub mod change_service;
 pub mod error;
 pub mod link_service;
 pub mod orphan_service;
@@ -5,6 +6,8 @@ pub mod session_service;
 pub mod tree_service;
 pub mod upload_service;
 
+#[cfg(test)]
+mod change_tests;
 #[cfg(test)]
 mod complete_retry_tests;
 #[cfg(test)]

@@ -22,6 +22,8 @@ pub struct Crumb {
 #[derive(Serialize)]
 pub struct Listing {
     pub session: String,
+    /// Cursor for `/changes`: read before the listing, so changes made while it was built show up again.
+    pub seq: i64,
     pub parent: Option<Uuid>,
     pub path: Vec<Crumb>,
     pub items: Vec<NodeEntry>,
@@ -45,6 +47,7 @@ pub async fn list(
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Listing>> {
     let session = state.sessions.open(&code).await?;
+    let seq = state.changes.head(&session.code).await?;
     let items = state.tree.list(&session.code, q.parent).await?;
     let path = state
         .tree
@@ -58,6 +61,7 @@ pub async fn list(
         .collect();
     Ok(Json(Listing {
         session: session.code,
+        seq,
         parent: q.parent,
         path,
         items,

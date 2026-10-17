@@ -1,10 +1,15 @@
 //! Postgres implementation of the repositories.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
+use crate::adapters::postgres_changes::{record, Subject};
+use crate::domain::change::ChangeKind;
 use crate::domain::session::Session;
+use crate::ports::change_bus::ChangeBus;
 use crate::ports::session_repo::{RepoError, SessionRepo};
 
 pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
@@ -23,11 +28,18 @@ fn storage(e: sqlx::Error) -> RepoError {
 #[derive(Clone)]
 pub struct PgSessionRepo {
     pool: PgPool,
+    bus: Option<Arc<dyn ChangeBus>>,
 }
 
 impl PgSessionRepo {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, bus: None }
+    }
+
+    /// Wakes whoever waits for changes of a session once one is committed.
+    pub fn with_bus(mut self, bus: Arc<dyn ChangeBus>) -> Self {
+        self.bus = Some(bus);
+        self
     }
 }
 
@@ -78,14 +90,27 @@ impl SessionRepo for PgSessionRepo {
     }
 
     async fn set_description(&self, code: &str, description: &str) -> Result<(), RepoError> {
+        let mut tx = self.pool.begin().await.map_err(storage)?;
         let r = sqlx::query("UPDATE sessions SET description = $2 WHERE code = $1")
             .bind(code)
             .bind(description)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(storage)?;
         if r.rows_affected() == 0 {
             return Err(RepoError::NotFound);
+        }
+        record(
+            &mut tx,
+            code,
+            ChangeKind::SessionUpdated,
+            Subject::default(),
+            Utc::now(),
+        )
+        .await?;
+        tx.commit().await.map_err(storage)?;
+        if let Some(bus) = &self.bus {
+            bus.publish(code);
         }
         Ok(())
     }

@@ -36,6 +36,7 @@ a { color: inherit; }
 
 #main { display: grid; gap: 16px; }
 .bar { display: flex; align-items: center; gap: 12px; }
+.grow { flex: 1; }
 .brand { font: 500 13px var(--mono); letter-spacing: .04em; color: var(--muted); text-decoration: none; }
 .env { font: 600 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--env); border: 1px solid var(--env); border-radius: 4px; padding: 1px 8px; }
 .foot { color: var(--muted); font: 12px var(--mono); }
@@ -132,6 +133,11 @@ dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--s
 dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .dialog-body { padding: 20px; display: grid; gap: 14px; justify-items: center; }
 .dialog-body img { max-width: 100%; height: auto; border-radius: 6px; }
+.dialog-body.form { justify-items: stretch; min-width: min(420px, calc(100vw - 64px)); }
+.dialog-body.form label { font: 500 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.dialog-body.form input { font: 14px var(--mono); padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.dialog-body.form p { margin: 0; }
+#open-settings.on { border-color: var(--ok); }
 .dialog-body code { font: 500 14px var(--mono); overflow-wrap: anywhere; text-align: center; }
 
 #toasts { position: fixed; left: 16px; right: 16px; bottom: 16px; display: grid; gap: 8px; justify-items: center; pointer-events: none; }

@@ -6,8 +6,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use chrono::{Duration, Utc};
 
+use crate::adapters::change_bus::InProcessBus;
 use crate::adapters::memory_blobs::MemoryBlobStore;
 use crate::adapters::postgres::{connect, PgSessionRepo};
+use crate::adapters::postgres_changes::PgChangeRepo;
 use crate::adapters::postgres_links::PgLinkRepo;
 use crate::adapters::postgres_nodes::PgNodeRepo;
 use crate::adapters::postgres_uploads::PgUploadRepo;
@@ -15,6 +17,7 @@ use crate::ports::blob_store::BlobStore;
 use crate::ports::clock::{Clock, ManualClock};
 use crate::ports::code_generator::RandomCodeGenerator;
 use crate::ports::node_repo::{NewVersion, NodeRepo};
+use crate::services::change_service::ChangeService;
 use crate::services::error::ServiceError;
 use crate::services::link_service::LinkService;
 use crate::services::session_service::SessionService;
@@ -30,6 +33,9 @@ pub struct Fixture {
     pub tree: Arc<TreeService>,
     pub uploads: Arc<UploadService>,
     pub links: Arc<LinkService>,
+    pub changes: Arc<ChangeService>,
+    pub change_repo: Arc<PgChangeRepo>,
+    pub bus: Arc<InProcessBus>,
     pub nodes: Arc<PgNodeRepo>,
     pub blobs: Arc<MemoryBlobStore>,
     pub clock: Arc<ManualClock>,
@@ -40,7 +46,8 @@ pub async fn fixture() -> Fixture {
     dotenvy::dotenv().ok();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = connect(&url).await.unwrap();
-    let nodes = Arc::new(PgNodeRepo::new(pool.clone()));
+    let bus = Arc::new(InProcessBus::new());
+    let nodes = Arc::new(PgNodeRepo::new(pool.clone()).with_bus(bus.clone()));
     // Start far in the past so a sweep here never reaches sessions other tests made with the real clock.
     let clock = Arc::new(ManualClock::new(Utc::now() - Duration::days(120)));
     let blobs = Arc::new(MemoryBlobStore::with_clock(clock.clone()));
@@ -59,7 +66,7 @@ pub async fn fixture() -> Fixture {
     });
     let links_repo = Arc::new(PgLinkRepo::new(pool.clone()));
     let sessions = Arc::new(SessionService {
-        sessions: Arc::new(PgSessionRepo::new(pool)),
+        sessions: Arc::new(PgSessionRepo::new(pool.clone()).with_bus(bus.clone())),
         nodes: nodes.clone(),
         blobs: blobs.clone(),
         uploads: uploads.clone(),
@@ -67,6 +74,14 @@ pub async fn fixture() -> Fixture {
         clock: clock.clone(),
         code_length: 5,
         idle_ttl_days: 7,
+    });
+    let change_repo = Arc::new(PgChangeRepo::new(pool));
+    let changes = Arc::new(ChangeService {
+        sessions: sessions.clone(),
+        changes: change_repo.clone(),
+        bus: bus.clone(),
+        poll: std::time::Duration::from_secs(60),
+        closing: tokio::sync::watch::channel(false).0,
     });
     let links = Arc::new(LinkService {
         links: links_repo,
@@ -89,13 +104,16 @@ pub async fn fixture() -> Fixture {
         tree,
         uploads,
         links,
+        changes,
+        change_repo,
+        bus,
         nodes,
         blobs,
         clock,
     }
 }
 
-fn nv(key: &str) -> NewVersion {
+pub fn nv(key: &str) -> NewVersion {
     NewVersion {
         size: 3,
         content_type: "text/plain".into(),

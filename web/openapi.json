@@ -45,6 +45,23 @@
         "responses": { "200": { "description": "The files", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Listing" } } } }, "404": { "$ref": "#/components/responses/NotFound" } }
       }
     },
+    "/api/s/{code}/changes": {
+      "parameters": [{ "$ref": "#/components/parameters/code" }],
+      "get": {
+        "summary": "Follow a session: what changed after a cursor",
+        "description": "Start from the `seq` of a file listing. Without `after`, only the current cursor is returned. When there is news the answer is immediate; otherwise the request waits up to `wait` seconds. 410 means the cursor is too old (or from the future): list the session again and continue from the `seq` in the answer. With `Accept: text/event-stream` the same events arrive as server-sent events (`change`, `reset`, `gone`) with the sequence number as id, so `Last-Event-ID` resumes.",
+        "operationId": "listChanges",
+        "parameters": [
+          { "name": "after", "in": "query", "schema": { "type": "integer" }, "description": "The `seq` of the last event seen" },
+          { "name": "wait", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 30 }, "description": "Seconds to wait for news" }
+        ],
+        "responses": {
+          "200": { "description": "Events after the cursor, possibly none", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChangePage" } } } },
+          "410": { "description": "Cursor too old: list the session again", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChangePage" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/api/s/{code}/nodes/{id}": {
       "parameters": [{ "$ref": "#/components/parameters/code" }, { "$ref": "#/components/parameters/id" }],
       "patch": {
@@ -264,7 +281,29 @@
         "type": "object",
         "properties": {
           "session": { "type": "string" },
+          "seq": { "type": "integer", "description": "Cursor for /changes" },
           "items": { "type": "array", "items": { "$ref": "#/components/schemas/NodeEntry" } }
+        }
+      },
+      "ChangePage": {
+        "type": "object",
+        "properties": {
+          "seq": { "type": "integer", "description": "Cursor for the next call" },
+          "reset": { "type": "boolean" },
+          "events": { "type": "array", "items": { "$ref": "#/components/schemas/Change" } }
+        }
+      },
+      "Change": {
+        "type": "object",
+        "properties": {
+          "seq": { "type": "integer" },
+          "kind": { "type": "string", "enum": ["version_added", "file_updated", "file_deleted", "tag_added", "tag_removed", "session_updated"] },
+          "node_id": { "type": "string", "format": "uuid", "nullable": true },
+          "version_id": { "type": "string", "format": "uuid", "nullable": true },
+          "name": { "type": "string", "nullable": true, "description": "File name; kept for deleted files" },
+          "version": { "type": "integer", "nullable": true },
+          "tag": { "type": "string", "nullable": true },
+          "at": { "type": "string", "format": "date-time" }
         }
       },
       "Stored": {

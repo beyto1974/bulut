@@ -1,13 +1,17 @@
 //! Postgres implementation of the file tree repository.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
+use crate::adapters::postgres_changes::{lock_session, record, Subject};
+use crate::domain::change::ChangeKind;
 use crate::domain::node::{FileVersion, Node, NodeEntry, NodeKind};
+use crate::ports::change_bus::ChangeBus;
 use crate::ports::node_repo::{NewVersion, NodePatch, NodeRepo};
 use crate::ports::session_repo::RepoError;
 
@@ -47,6 +51,7 @@ impl Default for Limits {
 pub struct PgNodeRepo {
     pool: PgPool,
     limits: Limits,
+    bus: Option<Arc<dyn ChangeBus>>,
 }
 
 impl PgNodeRepo {
@@ -54,6 +59,19 @@ impl PgNodeRepo {
         Self {
             pool,
             limits: Limits::default(),
+            bus: None,
+        }
+    }
+
+    /// Wakes whoever waits for changes of a session once one is committed.
+    pub fn with_bus(mut self, bus: Arc<dyn ChangeBus>) -> Self {
+        self.bus = Some(bus);
+        self
+    }
+
+    fn published(&self, session: &str) {
+        if let Some(bus) = &self.bus {
+            bus.publish(session);
         }
     }
 
@@ -155,6 +173,7 @@ impl PgNodeRepo {
             .execute(&mut *tx)
             .await
             .map_err(storage)?;
+        lock_session(&mut tx, session).await?;
 
         let existing = sqlx::query(&format!(
             "SELECT {NODE_COLS} FROM nodes
@@ -269,7 +288,22 @@ impl PgNodeRepo {
             .fetch_one(&mut *tx)
             .await
             .map_err(storage)?;
+        record(
+            &mut tx,
+            session,
+            ChangeKind::VersionAdded,
+            Subject {
+                node_id: Some(node.id),
+                version_id: Some(id),
+                name: Some(&node.name),
+                version: Some(next),
+                tag: None,
+            },
+            now,
+        )
+        .await?;
         tx.commit().await.map_err(storage)?;
+        self.published(session);
         Ok(Attempt::Done(Box::new((node, version_from(&row)))))
     }
 }
@@ -379,6 +413,8 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn update(&self, session: &str, id: Uuid, patch: NodePatch) -> Result<Node, RepoError> {
+        let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
         let res = sqlx::query(&format!(
             "UPDATE nodes SET name = COALESCE($3, name), note = COALESCE($4, note)
              WHERE id = $1 AND session_code = $2 RETURNING {NODE_COLS}"
@@ -387,18 +423,34 @@ impl NodeRepo for PgNodeRepo {
         .bind(session)
         .bind(patch.name)
         .bind(patch.note)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await;
-        match res {
-            Ok(Some(row)) => Ok(node_from(&row)),
-            Ok(None) => Err(RepoError::NotFound),
-            Err(e) if is_unique(&e) => Err(RepoError::NameTaken),
-            Err(e) => Err(storage(e)),
-        }
+        let node = match res {
+            Ok(Some(row)) => node_from(&row),
+            Ok(None) => return Err(RepoError::NotFound),
+            Err(e) if is_unique(&e) => return Err(RepoError::NameTaken),
+            Err(e) => return Err(storage(e)),
+        };
+        record(
+            &mut tx,
+            session,
+            ChangeKind::FileUpdated,
+            Subject {
+                node_id: Some(node.id),
+                name: Some(&node.name),
+                ..Subject::default()
+            },
+            Utc::now(),
+        )
+        .await?;
+        tx.commit().await.map_err(storage)?;
+        self.published(session);
+        Ok(node)
     }
 
     async fn delete(&self, session: &str, id: Uuid) -> Result<Vec<String>, RepoError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
         let rows = sqlx::query(
             "WITH RECURSIVE sub AS (
                  SELECT id FROM nodes WHERE id = $1 AND session_code = $2
@@ -412,16 +464,35 @@ impl NodeRepo for PgNodeRepo {
         .fetch_all(&mut *tx)
         .await
         .map_err(storage)?;
-        let deleted = sqlx::query("DELETE FROM nodes WHERE id = $1 AND session_code = $2")
-            .bind(id)
-            .bind(session)
-            .execute(&mut *tx)
-            .await
-            .map_err(storage)?;
-        if deleted.rows_affected() == 0 {
-            return Err(RepoError::NotFound);
-        }
+        let gone = sqlx::query(
+            "DELETE FROM nodes WHERE id = $1 AND session_code = $2 RETURNING name, kind",
+        )
+        .bind(id)
+        .bind(session)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage)?
+        .ok_or(RepoError::NotFound)?;
+        let name: String = gone.get("name");
+        let kind = if gone.get::<String, _>("kind") == "folder" {
+            ChangeKind::FolderDeleted
+        } else {
+            ChangeKind::FileDeleted
+        };
+        record(
+            &mut tx,
+            session,
+            kind,
+            Subject {
+                node_id: Some(id),
+                name: Some(&name),
+                ..Subject::default()
+            },
+            Utc::now(),
+        )
+        .await?;
         tx.commit().await.map_err(storage)?;
+        self.published(session);
         Ok(keys_from(&rows))
     }
 
@@ -530,6 +601,8 @@ impl NodeRepo for PgNodeRepo {
         let Some((node, _)) = self.version(session, version_id).await? else {
             return Err(RepoError::NotFound);
         };
+        let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
         sqlx::query(
             "INSERT INTO tags (node_id, version_id, tag) VALUES ($1, $2, $3)
              ON CONFLICT (node_id, tag) DO UPDATE SET version_id = EXCLUDED.version_id",
@@ -537,9 +610,25 @@ impl NodeRepo for PgNodeRepo {
         .bind(node.id)
         .bind(version_id)
         .bind(tag)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(storage)?;
+        record(
+            &mut tx,
+            session,
+            ChangeKind::TagAdded,
+            Subject {
+                node_id: Some(node.id),
+                version_id: Some(version_id),
+                name: Some(&node.name),
+                tag: Some(tag),
+                ..Subject::default()
+            },
+            Utc::now(),
+        )
+        .await?;
+        tx.commit().await.map_err(storage)?;
+        self.published(session);
         self.version(session, version_id)
             .await?
             .map(|(_, v)| v)
@@ -552,15 +641,36 @@ impl NodeRepo for PgNodeRepo {
         version_id: Uuid,
         tag: &str,
     ) -> Result<(), RepoError> {
-        if self.version(session, version_id).await?.is_none() {
+        let Some((node, _)) = self.version(session, version_id).await? else {
             return Err(RepoError::NotFound);
-        }
-        sqlx::query("DELETE FROM tags WHERE version_id = $1 AND tag = $2")
+        };
+        let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
+        let removed = sqlx::query("DELETE FROM tags WHERE version_id = $1 AND tag = $2")
             .bind(version_id)
             .bind(tag)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(storage)?;
+        // Removing a tag that is not there changes nothing, so it is not news either.
+        if removed.rows_affected() > 0 {
+            record(
+                &mut tx,
+                session,
+                ChangeKind::TagRemoved,
+                Subject {
+                    node_id: Some(node.id),
+                    version_id: Some(version_id),
+                    name: Some(&node.name),
+                    tag: Some(tag),
+                    ..Subject::default()
+                },
+                Utc::now(),
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(storage)?;
+        self.published(session);
         Ok(())
     }
 

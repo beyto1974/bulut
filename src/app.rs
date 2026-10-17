@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 
+use crate::adapters::change_bus::InProcessBus;
 use crate::adapters::postgres::PgSessionRepo;
+use crate::adapters::postgres_changes::PgChangeRepo;
 use crate::adapters::postgres_links::PgLinkRepo;
 use crate::adapters::postgres_nodes::{Limits, PgNodeRepo};
 use crate::adapters::postgres_uploads::PgUploadRepo;
@@ -14,6 +16,7 @@ use crate::http::AppState;
 use crate::ports::blob_store::BlobStore;
 use crate::ports::clock::SystemClock;
 use crate::ports::code_generator::RandomCodeGenerator;
+use crate::services::change_service::ChangeService;
 use crate::services::link_service::LinkService;
 use crate::services::orphan_service::OrphanSweeper;
 use crate::services::session_service::SessionService;
@@ -26,11 +29,16 @@ pub fn build_state(
     blobs: Arc<dyn BlobStore>,
     version: &'static str,
 ) -> AppState {
-    let nodes = Arc::new(PgNodeRepo::new(pool.clone()).with_limits(Limits {
-        max_files: i64::from(config.max_files_per_session),
-        max_versions_per_file: i64::from(config.max_versions_per_file),
-        max_session_bytes: i64::try_from(config.max_session_bytes).unwrap_or(i64::MAX),
-    }));
+    let bus = Arc::new(InProcessBus::new());
+    let nodes = Arc::new(
+        PgNodeRepo::new(pool.clone())
+            .with_bus(bus.clone())
+            .with_limits(Limits {
+                max_files: i64::from(config.max_files_per_session),
+                max_versions_per_file: i64::from(config.max_versions_per_file),
+                max_session_bytes: i64::try_from(config.max_session_bytes).unwrap_or(i64::MAX),
+            }),
+    );
     let clock = Arc::new(SystemClock);
     let uploads_repo = Arc::new(PgUploadRepo::new(pool.clone()));
     let uploads = Arc::new(UploadService {
@@ -47,7 +55,7 @@ pub fn build_state(
     });
     let links_repo = Arc::new(PgLinkRepo::new(pool.clone()));
     let sessions = Arc::new(SessionService {
-        sessions: Arc::new(PgSessionRepo::new(pool)),
+        sessions: Arc::new(PgSessionRepo::new(pool.clone()).with_bus(bus.clone())),
         nodes: nodes.clone(),
         blobs: blobs.clone(),
         uploads: uploads.clone(),
@@ -74,6 +82,13 @@ pub fn build_state(
             code_length: config.code_length,
         })
     });
+    let changes = Arc::new(ChangeService {
+        sessions: sessions.clone(),
+        changes: Arc::new(PgChangeRepo::new(pool)),
+        bus,
+        poll: Duration::from_secs(5),
+        closing: tokio::sync::watch::channel(false).0,
+    });
     let tree = Arc::new(TreeService {
         folders_enabled: config.folders_enabled,
         max_tags: config.max_tags_per_version,
@@ -88,6 +103,7 @@ pub fn build_state(
         tree,
         uploads,
         links,
+        changes,
         orphans,
     }
 }

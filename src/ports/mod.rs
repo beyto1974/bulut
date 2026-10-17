@@ -1,4 +1,6 @@
 pub mod blob_store;
+pub mod change_bus;
+pub mod change_repo;
 pub mod clock;
 pub mod code_generator;
 pub mod link_repo;
