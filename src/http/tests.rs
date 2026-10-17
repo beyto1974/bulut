@@ -24,6 +24,7 @@ pub(super) async fn app() -> (Router, Fixture) {
         tree: f.tree.clone(),
         uploads: f.uploads.clone(),
         links: f.links.clone(),
+        changes: f.changes.clone(),
         orphans: None,
     };
     (router(state), f)

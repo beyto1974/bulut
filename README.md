@@ -24,6 +24,8 @@ builds, logs and recordings between a development environment and a person, in e
   the newest one is always `latest`. Both the created time of the file and the upload time are kept.
 - **Notes.** A description for the session and a note on every file.
 - **Parallel uploads.** Files upload at the same time, so a small file never waits behind a large one.
+- **Live.** `GET /api/s/{code}/changes` tells a client what changed after a cursor, as a long poll or as
+  server-sent events. The web UI uses it, so uploads from other devices show up by themselves.
 - **Agent friendly.** REST, `llms.txt`, an OpenAPI description and an MCP endpoint.
 - **Tidy.** A session is deleted, with its files, after 7 days without any activity (views, downloads and
   uploads all count). A session holds at most 100 files; new versions do not count.

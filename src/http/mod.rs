@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::Config;
+use crate::services::change_service::ChangeService;
 use crate::services::link_service::LinkService;
 use crate::services::orphan_service::OrphanSweeper;
 use crate::services::session_service::SessionService;
@@ -17,6 +18,7 @@ use crate::services::tree_service::TreeService;
 use crate::services::upload_service::UploadService;
 
 pub mod agent;
+pub mod changes;
 pub mod error;
 pub mod files;
 pub mod mcp;
@@ -32,6 +34,7 @@ pub struct AppState {
     pub tree: Arc<TreeService>,
     pub uploads: Arc<UploadService>,
     pub links: Arc<LinkService>,
+    pub changes: Arc<ChangeService>,
     /// `None` when `ORPHAN_GRACE_HOURS=0` switches the clean-up off.
     pub orphans: Option<Arc<OrphanSweeper>>,
 }
@@ -59,6 +62,7 @@ pub fn router(state: AppState) -> Router {
                 .delete(sessions::delete),
         )
         .route("/api/s/{code}/files", get(tree::list))
+        .route("/api/s/{code}/changes", get(changes::changes))
         .route("/api/s/{code}/folders", post(tree::create_folder))
         .route(
             "/api/s/{code}/nodes/{id}",
@@ -125,8 +129,10 @@ async fn version(axum::extract::State(state): axum::extract::State<AppState>) ->
 #[cfg(test)]
 mod agent_tests;
 #[cfg(test)]
+mod changes_tests;
+#[cfg(test)]
 mod file_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 #[cfg(test)]
 mod ui_tests;

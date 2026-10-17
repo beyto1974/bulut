@@ -213,6 +213,7 @@ pub fn general_index(
 - Download the newest version: GET {base_url}/api/s/<code>/download?name=build.apk
 - Download a tagged version: GET {base_url}/api/s/<code>/download?name=build.apk&tag=v1.4.1
 - List files as JSON, with ids: GET {base_url}/api/s/<code>/files
+- Follow a session: GET {base_url}/api/s/<code>/changes?after=<seq>&wait=25 (seq comes from the listing; add Accept: text/event-stream for server-sent events)
 - Set a note: PATCH {base_url}/api/s/<code>/nodes/<id> with JSON {{\"note\": \"...\"}}
 - Chunked upload: POST /api/s/<code>/uploads, PUT each part, GET the upload to see which parts exist, then POST .../complete
 
