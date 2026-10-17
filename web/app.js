@@ -435,9 +435,13 @@
       try { await refreshVersions(); } catch (e) { toast(e.message, true); }
     }
 
+    // Several reloads can be in flight (an event, a returning tab, an upload): only the newest counts.
+    let reloadCount = 0;
     async function reload(resetCursor) {
+      const mine = ++reloadCount;
       try {
         const listing = await api('GET', `${base}/files`);
+        if (mine !== reloadCount) return;
         state.items = listing.items.filter((i) => i.kind === 'file');
         // The listing is at least as new as its cursor, so earlier events need no refresh of their own.
         state.seen = listing.seq;
@@ -584,7 +588,7 @@
     dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
 
     // Refresh when the tab is opened again. No polling: that would keep an unattended session alive.
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reload(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleRefresh({ session: true }); });
 
     // --- live updates ---
     // One event stream per open tab. It is read with fetch, not EventSource, because only fetch can
@@ -645,9 +649,12 @@
         return;
       }
       const seq = Number(id);
-      if (!Number.isFinite(seq) || seq <= state.seen) { if (seq > state.seq) state.seq = seq; return; }
-      state.seq = seq;
-      scheduleRefresh({ session: body.kind === 'session_updated' });
+      if (!Number.isFinite(seq)) return;
+      // The listing does not carry the description, so a description change is always fetched.
+      const sessionNews = body.kind === 'session_updated';
+      if (seq > state.seq) state.seq = seq;
+      if (seq <= state.seen && !sessionNews) return;
+      scheduleRefresh({ session: sessionNews });
     }
 
     async function follow() {

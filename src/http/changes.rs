@@ -92,7 +92,7 @@ fn stream(state: AppState, code: String, cursor: i64) -> Response {
             if let Some(event) = f.queue.pop_front() {
                 return Some((Ok::<Event, Infallible>(event), f));
             }
-            if f.done || f.started.elapsed() > STREAM_MAX {
+            if f.done || f.state.changes.is_closing() || f.started.elapsed() > STREAM_MAX {
                 return None;
             }
             match f.state.changes.wait(&f.code, f.cursor, STREAM_WAIT).await {

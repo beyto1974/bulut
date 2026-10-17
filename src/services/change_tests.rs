@@ -112,6 +112,7 @@ async fn a_session_deleted_during_a_wait_ends_it_with_not_found() {
         changes: f.change_repo.clone(),
         bus: f.bus.clone(),
         poll: Wait::from_millis(100),
+        closing: tokio::sync::watch::channel(false).0,
     };
     let waiter = tokio::spawn({
         let code = s.code.clone();
@@ -124,4 +125,23 @@ async fn a_session_deleted_during_a_wait_ends_it_with_not_found() {
         .expect("the wait ends")
         .unwrap();
     assert!(matches!(res, Err(ServiceError::NotFound)));
+}
+
+#[tokio::test]
+async fn closing_ends_waits_at_once() {
+    let f = fixture().await;
+    let s = f.sessions.create("").await.unwrap();
+    let waiter = tokio::spawn({
+        let changes = f.changes.clone();
+        let code = s.code.clone();
+        async move { changes.wait(&code, 0, Wait::from_secs(30)).await }
+    });
+    tokio::time::sleep(Wait::from_millis(300)).await;
+    let start = Instant::now();
+    f.changes.close();
+    let page = waiter.await.unwrap().unwrap();
+    assert!(start.elapsed() < Wait::from_secs(2));
+    assert!(page.events.is_empty());
+    assert!(f.changes.is_closing());
+    f.sessions.delete(&s.code).await.unwrap();
 }

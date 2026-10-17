@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
-use crate::adapters::postgres_changes::{record, Subject};
+use crate::adapters::postgres_changes::{lock_session, record, Subject};
 use crate::domain::change::ChangeKind;
 use crate::domain::node::{FileVersion, Node, NodeEntry, NodeKind};
 use crate::ports::change_bus::ChangeBus;
@@ -173,6 +173,7 @@ impl PgNodeRepo {
             .execute(&mut *tx)
             .await
             .map_err(storage)?;
+        lock_session(&mut tx, session).await?;
 
         let existing = sqlx::query(&format!(
             "SELECT {NODE_COLS} FROM nodes
@@ -413,6 +414,7 @@ impl NodeRepo for PgNodeRepo {
 
     async fn update(&self, session: &str, id: Uuid, patch: NodePatch) -> Result<Node, RepoError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
         let res = sqlx::query(&format!(
             "UPDATE nodes SET name = COALESCE($3, name), note = COALESCE($4, note)
              WHERE id = $1 AND session_code = $2 RETURNING {NODE_COLS}"
@@ -448,6 +450,7 @@ impl NodeRepo for PgNodeRepo {
 
     async fn delete(&self, session: &str, id: Uuid) -> Result<Vec<String>, RepoError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
         let rows = sqlx::query(
             "WITH RECURSIVE sub AS (
                  SELECT id FROM nodes WHERE id = $1 AND session_code = $2
@@ -599,6 +602,7 @@ impl NodeRepo for PgNodeRepo {
             return Err(RepoError::NotFound);
         };
         let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
         sqlx::query(
             "INSERT INTO tags (node_id, version_id, tag) VALUES ($1, $2, $3)
              ON CONFLICT (node_id, tag) DO UPDATE SET version_id = EXCLUDED.version_id",
@@ -641,6 +645,7 @@ impl NodeRepo for PgNodeRepo {
             return Err(RepoError::NotFound);
         };
         let mut tx = self.pool.begin().await.map_err(storage)?;
+        lock_session(&mut tx, session).await?;
         let removed = sqlx::query("DELETE FROM tags WHERE version_id = $1 AND tag = $2")
             .bind(version_id)
             .bind(tag)

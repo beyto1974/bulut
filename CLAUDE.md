@@ -18,7 +18,8 @@ builds the image from the bumped commit. Commits by CI carry `[skip ci]`.
 ## Decisions
 - No authentication in the app, by design: no accounts, no PINs, no tokens. The deployment is protected by a
   reverse proxy (bearer token for agents and REST, basic auth for humans). Do not add auth code to the app.
-- Idle expiry: `sessions.last_activity_at` is touched on any access (throttled to once per minute per session).
+- Idle expiry: `sessions.last_activity_at` is touched on any access (throttled to once per minute per session). Following `/changes` (long poll or event stream) touches it only when
+  the answer has news, so an idle wait does not keep a session alive.
   A sweeper deletes sessions idle longer than `SESSION_IDLE_TTL_DAYS`, including their stored files.
 - Limits per session (files, versions per file, bytes, unfinished uploads, tags) are enforced in the repository
   under a per-session lock, so parallel uploads cannot overshoot. Keep new limits there.

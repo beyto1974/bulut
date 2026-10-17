@@ -26,6 +26,22 @@ pub struct Subject<'a> {
     pub tag: Option<&'a str>,
 }
 
+/// Takes the session row before any node row. Every write to a session's tree starts here, so
+/// they all lock in the same order as deleting the session (session row, then its nodes) and
+/// cannot deadlock with it. Held until the transaction ends.
+pub async fn lock_session(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &str,
+) -> Result<(), RepoError> {
+    sqlx::query("SELECT 1 FROM sessions WHERE code = $1 FOR NO KEY UPDATE")
+        .bind(session)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(storage)?
+        .map(|_| ())
+        .ok_or(RepoError::NotFound)
+}
+
 /// Appends to the log of `session` inside `tx`. The counter update locks the session row until
 /// the transaction ends, so sequence numbers follow commit order and have no gaps.
 pub async fn record(
@@ -97,11 +113,24 @@ fn change_from(row: &PgRow) -> Change {
 #[async_trait]
 impl ChangeRepo for PgChangeRepo {
     async fn since(&self, session: &str, after: i64, limit: i64) -> Result<ChangePage, RepoError> {
-        let head = self.head(session).await?;
+        // One snapshot for the head, the oldest entry and the page: pruning or a new entry in
+        // between must not make the three disagree.
+        let mut tx = self.pool.begin().await.map_err(storage)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(storage)?;
+        let head: i64 = sqlx::query("SELECT change_seq FROM sessions WHERE code = $1")
+            .bind(session)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(storage)?
+            .map(|r| r.get("change_seq"))
+            .ok_or(RepoError::NotFound)?;
         let oldest: Option<i64> =
             sqlx::query("SELECT min(seq) AS oldest FROM changes WHERE session_code = $1")
                 .bind(session)
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *tx)
                 .await
                 .map_err(storage)?
                 .get("oldest");
@@ -123,7 +152,7 @@ impl ChangeRepo for PgChangeRepo {
         .bind(session)
         .bind(after)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(storage)?;
         let events: Vec<Change> = rows.iter().map(change_from).collect();

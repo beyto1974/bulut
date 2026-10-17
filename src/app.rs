@@ -87,6 +87,7 @@ pub fn build_state(
         changes: Arc::new(PgChangeRepo::new(pool)),
         bus,
         poll: Duration::from_secs(5),
+        closing: tokio::sync::watch::channel(false).0,
     });
     let tree = Arc::new(TreeService {
         folders_enabled: config.folders_enabled,

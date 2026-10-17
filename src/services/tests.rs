@@ -81,6 +81,7 @@ pub async fn fixture() -> Fixture {
         changes: change_repo.clone(),
         bus: bus.clone(),
         poll: std::time::Duration::from_secs(60),
+        closing: tokio::sync::watch::channel(false).0,
     });
     let links = Arc::new(LinkService {
         links: links_repo,
