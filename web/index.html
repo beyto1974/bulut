@@ -12,6 +12,8 @@
   <header class="bar">
     <a class="brand" href="/">bulut</a>
     <span id="env-badge" class="env" hidden></span>
+    <span class="grow"></span>
+    <button id="open-settings" class="btn" type="button">Settings</button>
   </header>
   <main id="main" aria-live="polite"></main>
   <footer class="foot">
@@ -27,6 +29,21 @@
     <div class="row">
       <a id="qr-download" class="btn" href="#">Download SVG</a>
       <button id="qr-close" class="btn primary" type="button">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="settings-dialog" aria-labelledby="settings-title">
+  <div class="dialog-body form">
+    <h2 id="settings-title">Settings</h2>
+    <label for="token-input">Bearer token (optional)</label>
+    <input id="token-input" type="password" autocomplete="off" autocapitalize="none" spellcheck="false">
+    <p class="muted">Only needed when the proxy in front of Bulut asks for a bearer token. It is kept in this browser
+      and sent as <code>Authorization: Bearer</code> with the requests this page makes.</p>
+    <div class="row">
+      <button id="settings-save" class="btn primary" type="button">Save</button>
+      <button id="settings-clear" class="btn" type="button">Remove token</button>
+      <button id="settings-close" class="btn" type="button">Close</button>
     </div>
   </div>
 </dialog>

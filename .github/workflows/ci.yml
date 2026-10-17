@@ -223,7 +223,9 @@ jobs:
           exit 1
 
       - name: Browser test
-        run: node e2e/ui.test.js "http://localhost:${{ steps.app.outputs.port }}"
+        run: |
+          node e2e/ui.test.js "http://localhost:${{ steps.app.outputs.port }}"
+          node e2e/live.test.js "http://localhost:${{ steps.app.outputs.port }}"
 
       - name: Large upload with a resume
         run: python3 e2e/big_upload.py "http://localhost:${{ steps.app.outputs.port }}"

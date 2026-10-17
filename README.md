@@ -161,6 +161,7 @@ End-to-end scripts run against a running instance. The browser test needs Playwr
 
 ```bash
 node e2e/ui.test.js http://localhost:8080         # real browser: upload, versions, tags, notes, QR dialog
+node e2e/live.test.js http://localhost:8080       # live updates over the event stream, bearer token in the settings
 python3 e2e/big_upload.py http://localhost:8080   # 1 GB in chunks with a resume, hash-checked download
 python3 e2e/parallel_upload.py http://localhost:8080
 python3 e2e/file_limit.py http://localhost:8080
