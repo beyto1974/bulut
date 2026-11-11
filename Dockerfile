@@ -3,7 +3,7 @@
 # Base images are pinned by digest so a build today is the build of next month. Dependabot
 # (see .github/dependabot.yml) proposes the updates.
 # rust:1-alpine
-FROM rust:1-alpine@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS build
+FROM rust:1-alpine@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /src
 # Dependency layer: cache crates before copying the sources.
